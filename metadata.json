@@ -1,0 +1,6 @@
+{
+  "name": "Anime Bhai",
+  "description": "A modern, dark-themed anime and movie streaming platform with administrative content management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
