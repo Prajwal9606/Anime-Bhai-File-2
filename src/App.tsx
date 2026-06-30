@@ -20,6 +20,9 @@ import TheaterView from './components/TheaterView';
 import LoginScreen from './components/LoginScreen';
 import SecuritySettings from './components/SecuritySettings';
 import AdminLoginScreen from './components/AdminLoginScreen';
+import LatestEpisodesSection from './components/LatestEpisodesSection';
+import JustCompletedSection from './components/JustCompletedSection';
+import JustCompletedMoviesSection from './components/JustCompletedMoviesSection';
 
 function AnimeBhaiApp() {
   const { user, signOut, isDemoMode } = useAuth();
@@ -70,6 +73,65 @@ function AnimeBhaiApp() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showLoginTab, setShowLoginTab] = useState(false);
   const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [logoClicks, setLogoClicks] = useState<number[]>([]);
+
+  const handleLogoClick = () => {
+    setSelectedVideo(null);
+    setPlayingVideo(null);
+    setActiveTab('home');
+    setShowAdmin(false);
+    setShowLoginTab(false);
+
+    const now = Date.now();
+    const newClicks = [...logoClicks.filter(t => now - t < 3000), now];
+    setLogoClicks(newClicks);
+
+    if (newClicks.length >= 5) {
+      setShowAdminLogin(true);
+      setLogoClicks([]);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  // Handle secret backdoor triggers
+  useEffect(() => {
+    // 1. URL search check
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('admin') === 'true') {
+      setShowAdminLogin(true);
+      setShowLoginTab(false);
+      setSelectedVideo(null);
+      setPlayingVideo(null);
+      setShowAdmin(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      
+      // Clean up search query param cleanly without reloading page
+      try {
+        const newUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+        window.history.pushState({ path: newUrl }, '', newUrl);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // 2. Keyboard shortcut: Ctrl + Alt + Shift + A
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.altKey && e.shiftKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setShowAdminLogin(prev => !prev);
+        setShowLoginTab(false);
+        setSelectedVideo(null);
+        setPlayingVideo(null);
+        setShowAdmin(false);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   const lastUserEmailRef = useRef<string | null>(null);
 
@@ -252,13 +314,7 @@ function AnimeBhaiApp() {
           {/* Logo & Tab Links */}
           <div className="flex flex-col sm:flex-row items-center gap-6 w-full md:w-auto">
             <div 
-              onClick={() => {
-                setSelectedVideo(null);
-                setPlayingVideo(null);
-                setActiveTab('home');
-                setShowAdmin(false);
-                setShowLoginTab(false);
-              }}
+              onClick={handleLogoClick}
               className="flex items-center gap-2.5 cursor-pointer group"
             >
               <div className="relative w-10 h-10 rounded-xl overflow-hidden shadow-[0_0_15px_rgba(34,211,238,0.25)] border border-cyan-500/20 group-hover:scale-105 transition-all">
@@ -563,80 +619,46 @@ function AnimeBhaiApp() {
                 {/* Lists categorized view */}
                 {activeTab === 'home' ? (
                   <div className="space-y-12">
-                    {/* 1. Trending Now Carousel */}
-                    <div className="space-y-6">
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1.5 h-6 bg-cyan-500 rounded-full" />
-                          <h3 className="text-xl md:text-2xl font-black tracking-tight text-white uppercase">
-                            Trending Now
-                          </h3>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-                        {allVideos.slice(0, 4).map(video => (
-                          <AnimeCard 
-                            key={video.id} 
-                            video={video} 
-                            onClick={() => handleSelectVideo(video)} 
-                          />
-                        ))}
-                      </div>
-                    </div>
+                    {/* Latest Episode Updates */}
+                    <LatestEpisodesSection
+                      movies={allVideos}
+                      onPlayEpisode={(movie, episodeIndex) => {
+                        setSelectedVideo(movie);
+                        setPlayingVideo(movie);
+                        setActiveEpisodeIndex(episodeIndex);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      isAdmin={isAdmin}
+                      onAdminClick={() => setShowAdmin(true)}
+                    />
 
-                    {/* 2. Anime Series Column Grid */}
-                    <div className="space-y-6">
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1.5 h-6 bg-cyan-500 rounded-full" />
-                          <h3 className="text-xl md:text-2xl font-black tracking-tight text-white uppercase">
-                            Anime Series
-                          </h3>
-                        </div>
-                        <button 
-                          onClick={() => setActiveTab('anime')}
-                          className="text-xs text-cyan-400 hover:text-white font-extrabold uppercase tracking-widest flex items-center gap-1 transition"
-                        >
-                          View All <ChevronRight size={14} />
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-                        {allVideos.filter(v => v.category === 'anime').slice(0, 4).map(video => (
-                          <AnimeCard 
-                            key={video.id} 
-                            video={video} 
-                            onClick={() => handleSelectVideo(video)} 
-                          />
-                        ))}
-                      </div>
-                    </div>
+                    {/* Just Completed Series */}
+                    <JustCompletedSection
+                      movies={allVideos}
+                      onPlayMovie={(movie) => {
+                        setSelectedVideo(movie);
+                        setPlayingVideo(movie);
+                        setActiveEpisodeIndex(0);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      onInspectMovie={(movie) => {
+                        handleSelectVideo(movie);
+                      }}
+                    />
 
-                    {/* 3. Top Rated Movies Column Grid */}
-                    <div className="space-y-6">
-                      <div className="flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                          <div className="w-1.5 h-6 bg-cyan-500 rounded-full" />
-                          <h3 className="text-xl md:text-2xl font-black tracking-tight text-white uppercase">
-                            Featured Movies
-                          </h3>
-                        </div>
-                        <button 
-                          onClick={() => setActiveTab('movies')}
-                          className="text-xs text-cyan-400 hover:text-white font-extrabold uppercase tracking-widest flex items-center gap-1 transition"
-                        >
-                          View All <ChevronRight size={14} />
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-                        {allVideos.filter(v => v.category === 'movie').slice(0, 4).map(video => (
-                          <AnimeCard 
-                            key={video.id} 
-                            video={video} 
-                            onClick={() => handleSelectVideo(video)} 
-                          />
-                        ))}
-                      </div>
-                    </div>
+                    {/* New Movies */}
+                    <JustCompletedMoviesSection
+                      movies={allVideos}
+                      onPlayMovie={(movie) => {
+                        setSelectedVideo(movie);
+                        setPlayingVideo(movie);
+                        setActiveEpisodeIndex(0);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      onInspectMovie={(movie) => {
+                        handleSelectVideo(movie);
+                      }}
+                    />
                   </div>
                 ) : (
                   // Individual tab grids
@@ -685,23 +707,7 @@ function AnimeBhaiApp() {
               <span className="text-gray-400">ANIME<span className="text-cyan-400">BHAI</span></span>
               <span>© 2026. All rights reserved.</span>
             </div>
-            <span className="hidden sm:inline text-white/10">|</span>
-            <button
-              id="admin-footer-trigger"
-              onClick={() => {
-                setShowAdminLogin(true);
-                setShowLoginTab(false);
-                setSelectedVideo(null);
-                setPlayingVideo(null);
-                setShowAdmin(false);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="text-[10px] text-gray-600 hover:text-cyan-400 font-black uppercase tracking-widest transition flex items-center gap-1.5 cursor-pointer"
-              title="Secure Administrator Portal"
-            >
-              <span className="w-1.5 h-1.5 bg-cyan-500/50 rounded-full" />
-              Admin Portal
-            </button>
+            {/* Admin entry is hidden. Use Ctrl+Alt+Shift+A or click Logo 5 times to activate admin panel */}
           </div>
           <div className="flex gap-6">
             <a href="#" className="hover:text-white transition">Terms</a>

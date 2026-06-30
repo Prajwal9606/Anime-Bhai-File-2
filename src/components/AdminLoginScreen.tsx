@@ -116,13 +116,13 @@ export default function AdminLoginScreen({ onSuccess, onCancel }: AdminLoginScre
 
         <form onSubmit={handleAdminSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block">Administrator Email</label>
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block">Admin Email</label>
             <div className="relative">
               <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
               <input 
                 type="email"
                 required
-                placeholder="PrajwalGadade96@gmail.com"
+                placeholder="Enter admin email"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 className="w-full bg-black border border-cyan-500/10 focus:border-cyan-500/50 rounded-xl pl-11 pr-4 py-3.5 text-xs text-white transition outline-none font-semibold"
@@ -159,16 +159,18 @@ export default function AdminLoginScreen({ onSuccess, onCancel }: AdminLoginScre
           </button>
         </form>
 
-        <div className="mt-6 pt-6 border-t border-white/5 space-y-3 text-center">
-          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Sandbox Helper Tool</span>
-          <button
-            type="button"
-            onClick={prefillAdminCredentials}
-            className="text-[10px] bg-cyan-950/20 hover:bg-cyan-950/40 border border-cyan-500/15 text-cyan-400 font-extrabold uppercase tracking-widest px-4 py-2 rounded-xl transition cursor-pointer"
-          >
-            Auto-fill Admin Credentials
-          </button>
-        </div>
+        {window.location.search.includes('helper=true') && (
+          <div className="mt-6 pt-6 border-t border-white/5 space-y-3 text-center">
+            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Sandbox Helper Tool</span>
+            <button
+              type="button"
+              onClick={prefillAdminCredentials}
+              className="text-[10px] bg-cyan-950/20 hover:bg-cyan-950/40 border border-cyan-500/15 text-cyan-400 font-extrabold uppercase tracking-widest px-4 py-2 rounded-xl transition cursor-pointer"
+            >
+              Auto-fill Admin Credentials
+            </button>
+          </div>
+        )}
       </motion.div>
     </div>
   );

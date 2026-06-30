@@ -214,7 +214,7 @@ export default function EpisodesList({ animeId, onEditEpisode }: EpisodesListPro
                       {availableLangs.length > 0 ? (
                         availableLangs.map(lang => {
                           let badgeStyle = 'bg-gray-800 border-gray-700 text-gray-400';
-                          let displayName = lang;
+                          let displayName: string = lang;
                           
                           if (lang === 'Hindi') {
                             badgeStyle = 'bg-orange-500/10 border-orange-500/30 text-orange-400 shadow-[0_0_10px_rgba(249,115,22,0.1)]';

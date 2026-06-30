@@ -4,7 +4,7 @@ import { Play, Pause, RotateCcw, RotateCw, Volume2, VolumeX, Maximize2, Minimize
 interface CustomPlayerProps {
   videoUrl?: string;
   embedHtml?: string;
-  audioSources?: { lang: 'Hindi' | 'Japanese' | 'English'; url: string }[];
+  audioSources?: { lang: 'Hindi' | 'Japanese' | 'English'; url: string; embedHtml?: string }[];
   title: string;
   subtitle?: string;
   onNextEpisode?: () => void;
@@ -13,6 +13,7 @@ interface CustomPlayerProps {
 
 export default function CustomPlayer({ videoUrl, embedHtml, audioSources, title, subtitle, onNextEpisode, hasNextEpisode }: CustomPlayerProps) {
   const [activeAudioUrl, setActiveAudioUrl] = useState('');
+  const [activeEmbedHtml, setActiveEmbedHtml] = useState('');
   const [activeLang, setActiveLang] = useState<'Hindi' | 'Japanese' | 'English'>('Hindi');
 
   // Robust update when audioSources or videoUrl changes
@@ -25,14 +26,17 @@ export default function CustomPlayer({ videoUrl, embedHtml, audioSources, title,
       
       const defaultSource = hindiSource || japaneseSource || englishSource || audioSources[0];
       setActiveAudioUrl(defaultSource.url);
+      setActiveEmbedHtml(defaultSource.embedHtml || '');
       setActiveLang(defaultSource.lang);
-    } else if (videoUrl) {
-      setActiveAudioUrl(videoUrl);
+    } else if (videoUrl || embedHtml) {
+      setActiveAudioUrl(videoUrl || '');
+      setActiveEmbedHtml(embedHtml || '');
       setActiveLang('Japanese');
     } else {
       setActiveAudioUrl('');
+      setActiveEmbedHtml('');
     }
-  }, [audioSources, videoUrl]);
+  }, [audioSources, videoUrl, embedHtml]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -219,8 +223,8 @@ export default function CustomPlayer({ videoUrl, embedHtml, audioSources, title,
       className="relative aspect-video w-full bg-black rounded-3xl overflow-hidden shadow-2xl group border border-white/5 select-none"
       id="custom-theater-player"
     >
-      {embedHtml ? (
-        <div className="w-full h-full" dangerouslySetInnerHTML={{ __html: embedHtml }} />
+      {activeEmbedHtml ? (
+        <div className="w-full h-full" dangerouslySetInnerHTML={{ __html: activeEmbedHtml }} />
       ) : (
         <video
           ref={videoRef}
@@ -367,7 +371,10 @@ export default function CustomPlayer({ videoUrl, embedHtml, audioSources, title,
                     const lang = e.target.value as 'Hindi' | 'Japanese' | 'English';
                     setActiveLang(lang);
                     const source = audioSources.find(s => s.lang === lang);
-                    if (source) setActiveAudioUrl(source.url);
+                    if (source) {
+                      setActiveAudioUrl(source.url);
+                      setActiveEmbedHtml(source.embedHtml || '');
+                    }
                   }}
                   className="bg-black text-white text-xs p-1 rounded cursor-pointer border border-white/10"
                 >

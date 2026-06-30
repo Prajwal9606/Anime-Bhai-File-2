@@ -15,6 +15,7 @@ interface AuthContextType {
   loading: boolean;
   error: string | null;
   isDemoMode: boolean;
+  setDemoMode: (demo: boolean) => void;
   signUp: (email: string, password: string, name?: string) => Promise<any>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -27,7 +28,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const isDemoMode = !hasSupabaseConfig;
+  const [isDemoMode, setIsDemoMode] = useState(() => {
+    const saved = localStorage.getItem('animebhai_use_demo_mode');
+    if (saved === 'true') return true;
+    if (saved === 'false') return false;
+    const customUrl = (import.meta as any).env?.VITE_SUPABASE_URL;
+    return !customUrl;
+  });
+
+  const setDemoMode = (demo: boolean) => {
+    setIsDemoMode(demo);
+    localStorage.setItem('animebhai_use_demo_mode', String(demo));
+  };
 
   // Track Auth State
   useEffect(() => {
@@ -343,7 +355,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [isDemoMode]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, isDemoMode, signUp, signIn, signOut, signInWithGoogle }}>
+    <AuthContext.Provider value={{ user, loading, error, isDemoMode, setDemoMode, signUp, signIn, signOut, signInWithGoogle }}>
       {children}
     </AuthContext.Provider>
   );

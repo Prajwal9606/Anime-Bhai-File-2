@@ -6,6 +6,7 @@
 import React, { useState, useMemo } from 'react';
 import { Play, Star, Film, Info, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { Video } from '../types';
+import AnimeImage from './AnimeImage';
 
 interface JustCompletedMoviesSectionProps {
   movies?: Video[];
@@ -42,7 +43,7 @@ export default function JustCompletedMoviesSection({
           </div>
           <div>
             <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-              Just Completed Movies
+              New Movies
               <span className="text-[10px] bg-purple-500/25 border border-purple-500/40 text-purple-300 px-2.5 py-0.5 rounded-full font-extrabold uppercase tracking-widest shadow-inner">
                 Feature Film
               </span>
@@ -69,18 +70,16 @@ export default function JustCompletedMoviesSection({
             {displayedMovies.slice(0, visibleCount).map((movie) => (
               <div
                 key={movie.id}
-                className="group relative bg-[#0e0e0e] border border-white/5 hover:border-white/15 rounded-lg overflow-hidden transition-all duration-300 cursor-pointer shadow hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] flex flex-col h-full"
+                onClick={() => onInspectMovie(movie)}
+                className="group relative bg-[#0e0e0e] border border-white/5 hover:border-purple-500/30 rounded-lg overflow-hidden transition-all duration-300 cursor-pointer shadow hover:shadow-[0_0_20px_rgba(168,85,247,0.25)] hover:scale-[1.02] active:scale-[0.98] flex flex-col h-full"
               >
                 {/* Image Preview Container */}
                 <div className="relative aspect-[2/3] w-full overflow-hidden bg-zinc-900 border-b border-white/5 shrink-0">
-                  <img
-                    src={movie.thumbnail}
+                  <AnimeImage
+                    title={movie.title}
+                    initialSrc={movie.thumbnail || movie.backdrop}
                     alt={movie.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                    referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      e.currentTarget.src = 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=600';
-                    }}
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out hover:brightness-110"
                   />
 
                   {/* Visual Gradient Overlay */}

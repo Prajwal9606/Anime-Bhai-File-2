@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Play, Sparkles, Star, Film, Tv, Info, Loader2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { Video } from '../types';
+import AnimeImage from './AnimeImage';
 
 interface JustCompletedSectionProps {
   movies?: Video[];
@@ -69,18 +70,16 @@ export default function JustCompletedSection({
             {displayedAnime.slice(0, visibleCount).map((movie) => (
               <div
                 key={movie.id}
-                className="group relative bg-[#0e0e0e] border border-white/5 hover:border-white/15 rounded-lg overflow-hidden transition-all duration-300 cursor-pointer shadow hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] flex flex-col h-full"
+                onClick={() => onInspectMovie(movie)}
+                className="group relative bg-[#0e0e0e] border border-white/5 hover:border-cyan-500/30 rounded-lg overflow-hidden transition-all duration-300 cursor-pointer shadow hover:shadow-[0_0_20px_rgba(6,182,212,0.25)] hover:scale-[1.02] active:scale-[0.98] flex flex-col h-full"
               >
                 {/* Image Preview Container */}
                 <div className="relative aspect-[2/3] w-full overflow-hidden bg-zinc-900 border-b border-white/5 shrink-0">
-                  <img
-                    src={movie.posterUrl}
+                  <AnimeImage
+                    title={movie.title}
+                    initialSrc={movie.thumbnail || movie.backdrop}
                     alt={movie.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                    referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      e.currentTarget.src = 'https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=600';
-                    }}
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out hover:brightness-110"
                   />
 
                   {/* Visual Gradient Overlay */}

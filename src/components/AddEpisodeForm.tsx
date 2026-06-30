@@ -8,8 +8,11 @@ interface EpisodeFormInputs {
   title: string;
   thumbnailUrl?: string;
   hindiUrl: string;
+  hindiEmbedHtml?: string;
   japaneseUrl?: string;
+  japaneseEmbedHtml?: string;
   englishUrl?: string;
+  englishEmbedHtml?: string;
   embedHtml?: string;
 }
 
@@ -36,8 +39,11 @@ export default function AddEpisodeForm({ animeId, animeTitle, onSuccess, onCance
       title: '',
       thumbnailUrl: '',
       hindiUrl: '',
+      hindiEmbedHtml: '',
       japaneseUrl: '',
+      japaneseEmbedHtml: '',
       englishUrl: '',
+      englishEmbedHtml: '',
       embedHtml: ''
     }
   });
@@ -55,9 +61,9 @@ export default function AddEpisodeForm({ animeId, animeTitle, onSuccess, onCance
 
     // Build standard audioSources list for compatibility
     const audioSources = [
-      { lang: 'Hindi', url: data.hindiUrl },
-      ...(data.japaneseUrl ? [{ lang: 'Japanese', url: data.japaneseUrl }] : []),
-      ...(data.englishUrl ? [{ lang: 'English', url: data.englishUrl }] : [])
+      { lang: 'Hindi' as const, url: data.hindiUrl, embedHtml: data.hindiEmbedHtml || '' },
+      ...((data.japaneseUrl || data.japaneseEmbedHtml) ? [{ lang: 'Japanese' as const, url: data.japaneseUrl || '', embedHtml: data.japaneseEmbedHtml || '' }] : []),
+      ...((data.englishUrl || data.englishEmbedHtml) ? [{ lang: 'English' as const, url: data.englishUrl || '', embedHtml: data.englishEmbedHtml || '' }] : [])
     ];
 
     try {
@@ -160,57 +166,99 @@ export default function AddEpisodeForm({ animeId, animeTitle, onSuccess, onCance
           />
         </div>
 
-        {/* Audio Tracks & Video Streams Section */}
+        {/* Audio Tracks, Video Streams & Language-Specific Embeds Section */}
         <div className="bg-black/50 border border-white/5 p-5 rounded-2xl space-y-4">
           <div className="flex items-center gap-2 border-b border-white/5 pb-3">
             <Radio className="w-4 h-4 text-cyan-400" />
             <h3 className="text-xs font-extrabold text-white uppercase tracking-wider">
-              Audio Tracks & Video Streams
+              Language Tracks (URLs & Embeds)
             </h3>
           </div>
 
           <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider flex justify-between">
-                <span>Hindi Dub Track URL <span className="text-red-500">*</span></span>
-                <span className="text-[9px] text-gray-500 lowercase">required default track</span>
-              </label>
-              <input
-                type="url"
-                {...register('hindiUrl', { required: 'Hindi dub URL is required as the default track' })}
-                placeholder="e.g. https://domain.com/hindi_track.mp4"
-                className="w-full bg-black border border-cyan-500/20 focus:border-cyan-500 rounded-xl px-4 py-2.5 text-xs text-white transition outline-none font-semibold"
-              />
-              {errors.hindiUrl && (
-                <span className="text-[10px] text-red-400 font-bold flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" /> {errors.hindiUrl.message}
-                </span>
-              )}
+            {/* Hindi Dub (Default) */}
+            <div className="bg-zinc-950/60 p-4 rounded-xl border border-white/5 space-y-3 relative">
+              <div className="absolute top-0 left-0 w-full h-0.5 bg-orange-500" />
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-black uppercase tracking-wider text-zinc-300">Hindi Track (Default)</span>
+                <span className="text-[9px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-1.5 py-0.5 rounded font-black uppercase">Required</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Video Stream URL</label>
+                  <input
+                    type="url"
+                    {...register('hindiUrl', { required: 'Hindi stream URL is required' })}
+                    placeholder="e.g. https://domain.com/hindi.mp4"
+                    className="w-full bg-black border border-white/10 focus:border-cyan-500 rounded-xl px-4 py-2 text-xs text-white transition outline-none font-mono"
+                  />
+                  {errors.hindiUrl && (
+                    <span className="text-[10px] text-red-400 font-bold flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> {errors.hindiUrl.message}
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Embed Code / Link</label>
+                  <input
+                    type="text"
+                    {...register('hindiEmbedHtml')}
+                    placeholder="e.g. <iframe src='...'> or embed link"
+                    className="w-full bg-black border border-white/10 focus:border-cyan-500 rounded-xl px-4 py-2 text-xs text-white transition outline-none font-mono"
+                  />
+                </div>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-gray-300 uppercase tracking-wider block">
-                  Japanese Track URL (Optional)
-                </label>
-                <input
-                  type="url"
-                  {...register('japaneseUrl')}
-                  placeholder="e.g. https://domain.com/japanese_track.mp4"
-                  className="w-full bg-black border border-white/10 focus:border-cyan-500 rounded-xl px-4 py-2.5 text-xs text-white transition outline-none font-semibold"
-                />
+            {/* Japanese Sub */}
+            <div className="bg-zinc-950/60 p-4 rounded-xl border border-white/5 space-y-3 relative">
+              <div className="absolute top-0 left-0 w-full h-0.5 bg-red-500" />
+              <span className="text-xs font-black uppercase tracking-wider text-zinc-300 block">Japanese Track (Optional)</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Video Stream URL</label>
+                  <input
+                    type="url"
+                    {...register('japaneseUrl')}
+                    placeholder="e.g. https://domain.com/japanese.mp4"
+                    className="w-full bg-black border border-white/10 focus:border-cyan-500 rounded-xl px-4 py-2 text-xs text-white transition outline-none font-mono"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Embed Code / Link</label>
+                  <input
+                    type="text"
+                    {...register('japaneseEmbedHtml')}
+                    placeholder="e.g. <iframe src='...'> or embed link"
+                    className="w-full bg-black border border-white/10 focus:border-cyan-500 rounded-xl px-4 py-2 text-xs text-white transition outline-none font-mono"
+                  />
+                </div>
               </div>
+            </div>
 
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-bold text-gray-300 uppercase tracking-wider block">
-                  English Dub Track URL (Optional)
-                </label>
-                <input
-                  type="url"
-                  {...register('englishUrl')}
-                  placeholder="e.g. https://domain.com/english_track.mp4"
-                  className="w-full bg-black border border-white/10 focus:border-cyan-500 rounded-xl px-4 py-2.5 text-xs text-white transition outline-none font-semibold"
-                />
+            {/* English Dub */}
+            <div className="bg-zinc-950/60 p-4 rounded-xl border border-white/5 space-y-3 relative">
+              <div className="absolute top-0 left-0 w-full h-0.5 bg-cyan-500" />
+              <span className="text-xs font-black uppercase tracking-wider text-zinc-300 block">English Track (Optional)</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Video Stream URL</label>
+                  <input
+                    type="url"
+                    {...register('englishUrl')}
+                    placeholder="e.g. https://domain.com/english.mp4"
+                    className="w-full bg-black border border-white/10 focus:border-cyan-500 rounded-xl px-4 py-2 text-xs text-white transition outline-none font-mono"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Embed Code / Link</label>
+                  <input
+                    type="text"
+                    {...register('englishEmbedHtml')}
+                    placeholder="e.g. <iframe src='...'> or embed link"
+                    className="w-full bg-black border border-white/10 focus:border-cyan-500 rounded-xl px-4 py-2 text-xs text-white transition outline-none font-mono"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -221,24 +269,23 @@ export default function AddEpisodeForm({ animeId, animeTitle, onSuccess, onCance
           <div className="flex items-center gap-2 border-b border-white/5 pb-3">
             <Code className="w-4 h-4 text-purple-400" />
             <h3 className="text-xs font-extrabold text-white uppercase tracking-wider">
-              Embed Codes (Alternative)
+              Default / Fallback Player Embed Code
             </h3>
           </div>
           <div className="space-y-1.5">
             <label className="text-[11px] font-bold text-gray-300 uppercase tracking-wider block">
-              HTML Embed Code
+              Fallback HTML Embed Code
             </label>
             <textarea
               {...register('embedHtml')}
               placeholder='e.g. <iframe src="https://streamp2p.com/embed/..." width="100%" height="100%" frameborder="0" allowfullscreen></iframe>'
-              className="w-full bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold h-20 resize-none"
+              className="w-full bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-cyan-500 transition outline-none font-mono h-16 resize-none"
             />
             <p className="text-[10px] text-gray-500 font-medium">
-              Paste standard iframe or HTML embed code from third-party hosts. When provided, this embed player will take precedence over local MP4 files.
+              Optional fallback general iframe embed code when no track-specific embeds are configured.
             </p>
           </div>
         </div>
-
         {/* Feedback Messages */}
         {successMsg && (
           <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-4 py-3 rounded-2xl flex items-center gap-2 text-xs font-bold">

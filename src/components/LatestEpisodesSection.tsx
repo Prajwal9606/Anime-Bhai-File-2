@@ -7,6 +7,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { Play, Tv, Sparkles, Clock, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Video, Episode } from '../types';
 import { motion } from 'motion/react';
+import AnimeImage from './AnimeImage';
 
 interface LatestEpisodesSectionProps {
   movies: Video[];
@@ -140,18 +141,15 @@ export default function LatestEpisodesSection({
               <div
                 key={`${movie.id}-${episode.id}`}
                 onClick={() => onPlayEpisode(movie, episode.index - 1)}
-                className="group relative bg-[#0e0e0e] border border-white/5 hover:border-white/15 rounded-lg overflow-hidden transition-all duration-300 cursor-pointer shadow hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] flex flex-col h-full animate-fade-in"
+                className="group relative bg-[#0e0e0e] border border-white/5 hover:border-cyan-500/30 rounded-lg overflow-hidden transition-all duration-300 cursor-pointer shadow hover:shadow-[0_0_20px_rgba(6,182,212,0.25)] hover:scale-[1.02] active:scale-[0.98] flex flex-col h-full animate-fade-in"
               >
                 {/* Image Preview Container */}
                 <div className="relative aspect-[2/3] w-full overflow-hidden bg-zinc-900 border-b border-white/5 shrink-0">
-                  <img
-                    src={movie.posterUrl || movie.backdropUrl || 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=1200'}
+                  <AnimeImage
+                    title={movie.title}
+                    initialSrc={movie.thumbnail || movie.backdrop}
                     alt={episode.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                    referrerPolicy="no-referrer"
-                    onError={(e) => {
-                      e.currentTarget.src = 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=1200';
-                    }}
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700 ease-out hover:brightness-110"
                   />
                   
                   {/* Visual Overlays */}

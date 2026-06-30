@@ -10,7 +10,7 @@ interface LoginScreenProps {
 }
 
 export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
-  const { signUp, signIn, signOut, error, isDemoMode, signInWithGoogle } = useAuth();
+  const { signUp, signIn, signOut, error, isDemoMode, setDemoMode, signInWithGoogle } = useAuth();
 
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
@@ -189,7 +189,12 @@ export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
         className="w-full max-w-md bg-[#111111]/90 backdrop-blur-xl border border-cyan-500/15 rounded-3xl p-8 shadow-[0_0_50px_rgba(6,182,212,0.1)] relative overflow-hidden"
       >
         {/* Supabase Status Indicator header badge */}
-        <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-black/40 border border-white/5 px-3 py-1 rounded-full">
+        <button 
+          type="button"
+          onClick={() => setDemoMode(!isDemoMode)}
+          className="absolute top-4 right-4 flex items-center gap-1.5 bg-black/40 border border-white/5 hover:border-cyan-500/30 px-3 py-1 rounded-full cursor-pointer transition-all active:scale-95 z-10"
+          title="Click to toggle between Demo Sandbox and Supabase Live auth modes"
+        >
           {isDemoMode ? (
             <>
               <Server size={11} className="text-amber-400" />
@@ -201,7 +206,7 @@ export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
               <span className="text-[10px] font-black uppercase text-cyan-400 tracking-wider">Supabase Live</span>
             </>
           )}
-        </div>
+        </button>
 
         {/* Brand Header */}
         <div className="text-center mb-8">

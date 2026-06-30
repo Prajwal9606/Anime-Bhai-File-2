@@ -39,6 +39,26 @@ interface AdminPanelProps {
   videos: Video[];
 }
 
+function cleanFirestoreData(obj: any): any {
+  if (obj === null || obj === undefined) return null;
+  if (Array.isArray(obj)) {
+    return obj.map(cleanFirestoreData);
+  }
+  if (typeof obj === 'object') {
+    const clean: any = {};
+    for (const key in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        const val = obj[key];
+        if (val !== undefined) {
+          clean[key] = cleanFirestoreData(val);
+        }
+      }
+    }
+    return clean;
+  }
+  return obj;
+}
+
 export default function AdminPanel({ videos }: AdminPanelProps) {
   const { user, isDemoMode } = useAuth();
   
@@ -430,10 +450,10 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
 
       // Update Firestore document
       try {
-        await updateDoc(doc(db, 'videos', selectedConfigAnime.id), {
+        await updateDoc(doc(db, 'videos', selectedConfigAnime.id), cleanFirestoreData({
           episodes: validatedEpisodes,
           duration: `${validatedEpisodes.length} Episodes`
-        });
+        }));
       } catch (firestoreErr) {
         handleFirestoreError(firestoreErr, OperationType.UPDATE, `videos/${selectedConfigAnime.id}`);
       }
@@ -513,7 +533,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
 
       // Also support synchronization into Firestore to update the immediate main feed safely
       try {
-        await addDoc(collection(db, 'videos'), {
+        await addDoc(collection(db, 'videos'), cleanFirestoreData({
           title: movieTitle,
           description: movieSynopsis,
           thumbnail: moviePosterUrl,
@@ -525,7 +545,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
           duration: movieDuration,
           rating: '4.5',
           createdAt: new Date().toISOString()
-        });
+        }));
       } catch (firestoreErr) {
         handleFirestoreError(firestoreErr, OperationType.CREATE, 'videos');
       }
@@ -649,7 +669,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
       }));
 
       try {
-        await addDoc(collection(db, 'videos'), {
+        await addDoc(collection(db, 'videos'), cleanFirestoreData({
           title: animeTitle,
           description: animeSynopsis,
           thumbnail: animePosterUrl,
@@ -666,7 +686,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
           duration: `${episodesList.length} Episodes`,
           episodes: mappedEpisodes,
           createdAt: new Date().toISOString()
-        });
+        }));
       } catch (firestoreErr) {
         handleFirestoreError(firestoreErr, OperationType.CREATE, 'videos');
       }
@@ -861,7 +881,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
     try {
       // 1. Update in Firestore
       try {
-        await updateDoc(doc(db, 'videos', editingVideo.id), updatedData);
+        await updateDoc(doc(db, 'videos', editingVideo.id), cleanFirestoreData(updatedData));
       } catch (firestoreErr) {
         handleFirestoreError(firestoreErr, OperationType.UPDATE, `videos/${editingVideo.id}`);
       }
@@ -1672,14 +1692,17 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
               ) : (
                 <>
                   {/* HEADER W/ STEP BADGES */}
-                  <div className="flex justify-between items-center pb-3 border-b border-white/5">
+                  <div className="flex justify-between items-center pb-4 mb-4 border-b border-white/10 bg-gradient-to-r from-zinc-900 via-purple-950/20 to-cyan-950/20 p-4 -mx-6 -mt-6 rounded-t-3xl border-t border-x border-white/5">
                     <div>
-                      <span className="text-[10px] font-black text-purple-500 uppercase tracking-widest block mb-1">SERIES PUBLISHER</span>
-                      <h4 className="text-md font-black text-white uppercase tracking-tight">Add Anime Series</h4>
+                      <span className="text-[9px] font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-cyan-400 uppercase block mb-1">SERIES PUBLISHER</span>
+                      <h4 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-2">
+                        <span>Add Anime Series</span>
+                        <span className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-ping" />
+                      </h4>
                     </div>
-                    <div className="flex items-center gap-1.5 bg-black px-2.5 py-1 rounded-full border border-white/5">
-                      <span className={`w-2 h-2 rounded-full ${animeStep === 1 ? 'bg-cyan-400 animate-pulse' : 'bg-green-400'}`} />
-                      <span className="text-[9px] font-black uppercase text-gray-400 tracking-wider">Step {animeStep} of 2</span>
+                    <div className="flex items-center gap-2 bg-black/60 px-3 py-1.5 rounded-full border border-white/10 backdrop-blur-md shadow-lg">
+                      <span className={`w-2 h-2 rounded-full ${animeStep === 1 ? 'bg-cyan-400 animate-pulse shadow-[0_0_8px_#22d3ee]' : 'bg-green-400 shadow-[0_0_8px_#4ade80]'}`} />
+                      <span className="text-[10px] font-bold uppercase text-zinc-300 tracking-wider">Step {animeStep} of 2</span>
                     </div>
                   </div>
 
@@ -2122,40 +2145,73 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
                             onChange={e => handleUpdateEpisodeField(idx, 'duration', e.target.value)}
                             className="w-full bg-black border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold"
                           />
-                          <div className="grid grid-cols-1 gap-2 border-t border-white/5 pt-2 mt-2">
-                            <span className="text-[9px] text-gray-400 font-bold uppercase tracking-widest">Audio Tracks</span>
-                            {['Hindi', 'Japanese', 'English'].map(lang => (
-                              <input
-                                key={lang}
-                                type="url"
-                                placeholder={`${lang} Audio URL`}
-                                value={ep.audioSources?.find(s => s.lang === lang)?.url || ''}
-                                onChange={e => {
-                                  const url = e.target.value;
-                                  const currentSources = ep.audioSources || [];
-                                  let nextSources = [...currentSources];
-                                  const sourceIndex = nextSources.findIndex(s => s.lang === lang);
+                          <div className="space-y-3 bg-zinc-950/60 p-3.5 rounded-xl border border-white/5 mt-1">
+                            <span className="text-[10px] text-cyan-400 font-black uppercase tracking-widest block">Language Sources (URLs & Embeds)</span>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              {(['Hindi', 'Japanese', 'English'] as const).map(lang => {
+                                const currentSources = ep.audioSources || [];
+                                const source = currentSources.find(s => s.lang === lang) || { lang, url: '', embedHtml: '' };
+                                
+                                return (
+                                  <div key={lang} className="bg-black/60 p-3 rounded-lg border border-white/10 space-y-2 relative">
+                                    <div className="flex justify-between items-center border-b border-white/5 pb-1 mb-1">
+                                      <span className="text-[10px] font-black text-zinc-300 uppercase">{lang}</span>
+                                      <span className={`w-1.5 h-1.5 rounded-full ${source.url || source.embedHtml ? 'bg-green-400 shadow-[0_0_6px_#4ade80]' : 'bg-zinc-600'}`} />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider block">Video Stream URL</label>
+                                      <input
+                                        type="url"
+                                        placeholder={`${lang} Stream URL`}
+                                        value={source.url || ''}
+                                        onChange={e => {
+                                          const url = e.target.value;
+                                          const nextSources = [...currentSources];
+                                          const sourceIndex = nextSources.findIndex(s => s.lang === lang);
 
-                                  if (sourceIndex > -1) {
-                                    if (url) nextSources[sourceIndex].url = url;
-                                    else nextSources.splice(sourceIndex, 1);
-                                  } else if (url) {
-                                    nextSources.push({ lang: lang as 'Hindi' | 'Japanese' | 'English', url });
-                                  }
+                                          if (sourceIndex > -1) {
+                                            nextSources[sourceIndex].url = url;
+                                          } else {
+                                            nextSources.push({ lang, url, embedHtml: '' });
+                                          }
+                                          handleUpdateEpisodeField(idx, 'audioSources', nextSources);
+                                        }}
+                                        className="w-full bg-black border border-white/10 rounded-md px-2 py-1 text-[11px] text-white focus:border-cyan-500 transition outline-none font-mono"
+                                      />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <label className="text-[8px] text-zinc-400 font-bold uppercase tracking-wider block">Embed Code / Link</label>
+                                      <textarea
+                                        placeholder={`${lang} Embed Code`}
+                                        value={source.embedHtml || ''}
+                                        onChange={e => {
+                                          const embedHtml = e.target.value;
+                                          const nextSources = [...currentSources];
+                                          const sourceIndex = nextSources.findIndex(s => s.lang === lang);
 
-                                  handleUpdateEpisodeField(idx, 'audioSources', nextSources);
-                                }}
-                                className="w-full bg-black border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold"
-                              />
-                            ))}
+                                          if (sourceIndex > -1) {
+                                            nextSources[sourceIndex].embedHtml = embedHtml;
+                                          } else {
+                                            nextSources.push({ lang, url: '', embedHtml });
+                                          }
+                                          handleUpdateEpisodeField(idx, 'audioSources', nextSources);
+                                        }}
+                                        className="w-full bg-black border border-white/10 rounded-md px-2 py-1 text-[11px] text-white focus:border-cyan-500 transition outline-none font-mono h-11 resize-none"
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
+                          
                           <div className="pt-2">
-                            <span className="text-[9px] text-gray-400 font-bold uppercase tracking-widest block mb-1">Embed Code</span>
+                            <span className="text-[10px] text-gray-400 font-black uppercase tracking-widest block mb-1">Default/Fallback Embed Code</span>
                             <textarea
                               placeholder="Embed Code (Supports MP4 & Streamp2p)"
                               value={ep.embedHtml || ''}
                               onChange={e => handleUpdateEpisodeField(idx, 'embedHtml', e.target.value)}
-                              className="w-full bg-black border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold h-20"
+                              className="w-full bg-black border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold h-16 resize-none font-mono"
                             />
                           </div>
                         </div>

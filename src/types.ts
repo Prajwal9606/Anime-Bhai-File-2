@@ -1,12 +1,12 @@
 export interface Episode {
   id: string;
   number: number;
-  index: number;
+  index?: number;
   title: string;
   videoUrl: string;
   duration: string;
   description?: string;
-  audioSources?: { lang: 'Hindi' | 'Japanese' | 'English'; url: string }[];
+  audioSources?: { lang: 'Hindi' | 'Japanese' | 'English'; url: string; embedHtml?: string }[];
   embedHtml?: string;
 }
 
