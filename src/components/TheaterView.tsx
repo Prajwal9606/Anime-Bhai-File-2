@@ -4,6 +4,7 @@
  */
 
 import React, { useRef, useState, useEffect, useMemo } from 'react';
+import Hls from 'hls.js';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Play,
@@ -32,7 +33,9 @@ import {
   Sparkle,
   ExternalLink,
   Unlock,
-  ShieldAlert
+  ShieldAlert,
+  ShieldCheck,
+  Shield
 } from 'lucide-react';
 import { Video } from '../types';
 
@@ -129,6 +132,14 @@ export default function TheaterView({
   };
 
   // --- Watch Room States ---
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const showLocalToast = (type: 'success' | 'error', message: string) => {
+    setToast({ type, message });
+    setTimeout(() => {
+      setToast(null);
+    }, 3000);
+  };
+
   const [activeEpisodeIndex, setActiveEpisodeIndex] = useState(propActiveEpisodeIndex ?? 0);
   useEffect(() => {
     setActiveEpisodeIndex(propActiveEpisodeIndex);
@@ -144,6 +155,9 @@ export default function TheaterView({
   const [lightOff, setLightOff] = useState(false);
   const [theaterMode, setTheaterMode] = useState(false);
   const [playerEngine, setPlayerEngine] = useState<'auto' | 'iframe' | 'native'>('auto');
+  const [showPopupShield, setShowPopupShield] = useState(true);
+  const [adBlockingEnabled, setAdBlockingEnabled] = useState(true);
+  const [blockedCount, setBlockedCount] = useState(0);
 
   // Audio Track State
   const [activeAudio, setActiveAudio] = useState<'Japanese' | 'English' | 'Hindi'>('Hindi');
@@ -176,7 +190,9 @@ export default function TheaterView({
         enVideoUrl: ep.enVideoUrl,
         enEmbedCode: ep.enEmbedCode,
         hnVideoUrl: ep.hnVideoUrl,
-        hnEmbedCode: ep.hnEmbedCode
+        hnEmbedCode: ep.hnEmbedCode,
+        audioSources: ep.audioSources,
+        embedHtml: ep.embedHtml
       }));
     }
 
@@ -232,22 +248,32 @@ export default function TheaterView({
 
   const activeMedia = useMemo(() => {
     let videoUrl = currentEpOrMovie.videoUrl || movie.videoUrl;
-    let embedCode: string | undefined = undefined;
+    let embedCode = currentEpOrMovie.embedHtml || movie.embedHtml;
 
-    if (activeAudio === 'Japanese') {
-      if (currentEpOrMovie.jpVideoUrl || currentEpOrMovie.jpEmbedCode) {
-        videoUrl = currentEpOrMovie.jpVideoUrl;
-        embedCode = currentEpOrMovie.jpEmbedCode;
+    // Check modern audioSources array first if it's an episode
+    if (currentEpOrMovie.audioSources) {
+      const source = currentEpOrMovie.audioSources.find((s: any) => s.lang === activeAudio);
+      if (source && (source.url || source.embedHtml)) {
+        videoUrl = source.url || undefined;
+        embedCode = source.embedHtml || undefined;
       }
-    } else if (activeAudio === 'English') {
-      if (currentEpOrMovie.enVideoUrl || currentEpOrMovie.enEmbedCode) {
-        videoUrl = currentEpOrMovie.enVideoUrl;
-        embedCode = currentEpOrMovie.enEmbedCode;
-      }
-    } else if (activeAudio === 'Hindi') {
-      if (currentEpOrMovie.hnVideoUrl || currentEpOrMovie.hnEmbedCode) {
-        videoUrl = currentEpOrMovie.hnVideoUrl;
-        embedCode = currentEpOrMovie.hnEmbedCode;
+    } else {
+      // Fallback to legacy fields if needed
+      if (activeAudio === 'Japanese') {
+        if (currentEpOrMovie.jpVideoUrl || currentEpOrMovie.jpEmbedCode) {
+          videoUrl = currentEpOrMovie.jpVideoUrl;
+          embedCode = currentEpOrMovie.jpEmbedCode;
+        }
+      } else if (activeAudio === 'English') {
+        if (currentEpOrMovie.enVideoUrl || currentEpOrMovie.enEmbedCode) {
+          videoUrl = currentEpOrMovie.enVideoUrl;
+          embedCode = currentEpOrMovie.enEmbedCode;
+        }
+      } else if (activeAudio === 'Hindi') {
+        if (currentEpOrMovie.hnVideoUrl || currentEpOrMovie.hnEmbedCode) {
+          videoUrl = currentEpOrMovie.hnVideoUrl;
+          embedCode = currentEpOrMovie.hnEmbedCode;
+        }
       }
     }
 
@@ -299,42 +325,169 @@ export default function TheaterView({
   const hasEmbed = !!activeMedia.embedCode;
   const isInsideIframe = typeof window !== 'undefined' && window.self !== window.top;
 
-  const renderEmbed = (code: string) => {
-    const trimmed = code.trim();
-    const sandboxEnabled = localStorage.getItem('cineflix-sandbox-enabled') === 'true'; // default to false (sandbox removed)
-    const sandboxSettings = localStorage.getItem('cineflix-sandbox-settings') || "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-fullscreen allow-pointer-lock allow-presentation";
-    if (trimmed.startsWith('<iframe') || trimmed.startsWith('<div')) {
-      let processedCode = trimmed;
-      if (processedCode.includes('<iframe')) {
-        if (!sandboxEnabled) {
-          // Completely strip any sandbox attributes to allow unrestricted 3rd party playback
-          processedCode = processedCode.replace(/\s?sandbox="[^"]*"/g, '');
-          processedCode = processedCode.replace(/\s?sandbox='[^']*'/g, '');
-        } else {
-          // Enforce sandbox settings that explicitly allow popups and escaping sandbox
-          if (!processedCode.includes('sandbox=')) {
-            processedCode = processedCode.replace('<iframe', `<iframe sandbox="${sandboxSettings}"`);
-          } else {
-            processedCode = processedCode.replace(/sandbox="[^"]*"/g, `sandbox="${sandboxSettings}"`);
-            processedCode = processedCode.replace(/sandbox='[^']*'/g, `sandbox='${sandboxSettings}'`);
-          }
+  // Set episode index back to 1 when title changes or propActiveEpisodeIndex is provided
+  useEffect(() => {
+    setActiveEpisodeIndex(propActiveEpisodeIndex ?? 0);
+    setShowPopupShield(adBlockingEnabled);
+    triggerLoadAnimation();
+  }, [movie, propActiveEpisodeIndex]);
+
+  // Set popup shield back to true when active media changes
+  useEffect(() => {
+    if (adBlockingEnabled) {
+      setShowPopupShield(true);
+    }
+  }, [activeMedia, adBlockingEnabled]);
+
+  // AdBlocker Core engine: intercept redirects, popup windows, and click hijacking without sandbox
+  useEffect(() => {
+    if (!adBlockingEnabled) return;
+
+    let lastClickTime = 0;
+
+    // Detect click attempts to track the window of user intent vs. background scripting popup triggers
+    const handleRoomClick = () => {
+      lastClickTime = Date.now();
+    };
+
+    // If the window loses focus (triggers blur event) within 2 seconds of clicking,
+    // a third-party ad script in the iframe has successfully triggered an unwanted popup or redirect.
+    const handleWindowBlur = () => {
+      const timeSinceClick = Date.now() - lastClickTime;
+      if (timeSinceClick < 2000) {
+        console.log('🛡️ AdBlocker: Intercepted and blocked background popup/popunder. Reclaiming focus.');
+        setBlockedCount(prev => prev + 1);
+        
+        // Reclaim main window focus immediately
+        window.focus();
+        
+        // Prevent ad back-button history hijacking
+        try {
+          window.history.pushState(null, '', window.location.href);
+        } catch (e) {
+          // ignore error
         }
       }
+    };
+
+    // Frame-busting / Top-level redirect protection:
+    // If the active focus element is an IFRAME, and the page is triggering a redirect,
+    // block it and notify the user.
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (document.activeElement && document.activeElement.tagName === 'IFRAME') {
+        setBlockedCount(prev => prev + 1);
+        const warningMessage = '🛡️ AdBlocker Active: An unauthorized frame redirect was blocked.';
+        e.preventDefault();
+        e.returnValue = warningMessage;
+        return warningMessage;
+      }
+    };
+
+    window.addEventListener('click', handleRoomClick, { capture: true });
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('click', handleRoomClick, { capture: true });
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [adBlockingEnabled]);
+
+  const renderEmbed = (code: string) => {
+    const trimmed = code.trim();
+    // Always strip sandbox attributes as requested ("don't add sandbox")
+    let processedCode = trimmed.replace(/\s?sandbox\s*=\s*"[^"]*"/gi, '').replace(/\s?sandbox\s*=\s*'[^']*'/gi, '').replace(/\s?sandbox\s*/gi, '');
+
+    if (adBlockingEnabled) {
+      // Strip intrusive tracking scripts while safely preserving HLS/Video players
+      processedCode = processedCode.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, (match) => {
+        const lower = match.toLowerCase();
+        if (lower.includes('player') || lower.includes('hls') || lower.includes('video') || lower.includes('m3u8')) {
+          return match;
+        }
+        // Increment blocked count asynchronously to avoid React render errors
+        setTimeout(() => setBlockedCount(prev => prev + 1), 10);
+        return '<!-- Blocked Tracker Script -->';
+      });
+
+      // Strip common 1x1 tracking elements
+      processedCode = processedCode.replace(/<img\s+[^>]*width=["'](1|0)["'][^>]*>/gi, '<!-- Blocked Tracking Image -->');
+      processedCode = processedCode.replace(/<img\s+[^>]*height=["'](1|0)["'][^>]*>/gi, '<!-- Blocked Tracking Image -->');
+    }
+
+    const shieldOverlay = showPopupShield && (
+      <div 
+        className="absolute inset-0 z-50 flex flex-col items-center justify-center cursor-pointer bg-[#050505]/95 backdrop-blur-md transition-all duration-300 hover:bg-[#080808]/90 group select-none"
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          setShowPopupShield(false);
+        }}
+      >
+        <div className="flex flex-col items-center gap-4 text-center px-6">
+          <motion.div 
+            animate={{ scale: [1, 1.05, 1] }}
+            transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+            className="w-16 h-16 rounded-full bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 group-hover:scale-110 group-hover:border-cyan-400/50 group-hover:bg-cyan-500/20 transition duration-300 shadow-[0_0_20px_rgba(6,182,212,0.15)]"
+          >
+            <Play className="w-8 h-8 fill-cyan-400/20 text-cyan-400 ml-1" />
+          </motion.div>
+          <div className="space-y-1.5 max-w-[280px]">
+            <p className="text-[10px] font-black tracking-[0.2em] text-cyan-400 uppercase drop-shadow-[0_0_8px_rgba(6,182,212,0.3)]">
+              Secure Stream Player
+            </p>
+            <p className="text-[11px] font-bold text-zinc-300">
+              Click anywhere to unblock popups & start player
+            </p>
+            <p className="text-[9px] font-medium text-zinc-500">
+              Protects against unsolicited third-party redirects
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+
+    const activeShieldBadge = adBlockingEnabled && (
+      <div className="absolute top-3 right-3 z-30 pointer-events-none flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#080808]/90 border border-emerald-500/30 text-emerald-400 text-[9px] font-extrabold tracking-widest uppercase backdrop-blur shadow-lg transition-all duration-300">
+        <Shield className="w-3 h-3 text-emerald-400 animate-pulse" />
+        <span>AdBlock Active</span>
+        {blockedCount > 0 && (
+          <span className="ml-1 px-1.5 py-0.5 rounded bg-emerald-500 text-black text-[9px] font-black leading-none animate-bounce">
+            {blockedCount} AdBlock
+          </span>
+        )}
+      </div>
+    );
+
+    if (processedCode.startsWith('<iframe') || processedCode.startsWith('<div')) {
       return (
-        <div 
-          className="w-full h-full relative z-10 flex items-center justify-center [&_iframe]:w-full [&_iframe]:h-full [&_iframe]:absolute [&_iframe]:inset-0 [&_iframe]:border-0"
-          dangerouslySetInnerHTML={{ __html: processedCode }}
-        />
+        <div className="w-full h-full relative z-10 flex items-center justify-center">
+          {shieldOverlay}
+          {activeShieldBadge}
+          <div 
+            id="adblock-secure-viewport"
+            className={`w-full h-full relative z-10 flex items-center justify-center transition-all duration-300 [&_iframe]:w-full [&_iframe]:h-full [&_iframe]:absolute [&_iframe]:inset-0 [&_iframe]:border-0 ${
+              adBlockingEnabled 
+                ? 'ring-1 ring-emerald-500/10 shadow-[inset_0_0_20px_rgba(16,185,129,0.05)]' 
+                : 'ring-1 ring-white/5'
+            }`}
+            dangerouslySetInnerHTML={{ __html: processedCode }}
+          />
+        </div>
       );
     } else {
       return (
-        <iframe
-          src={trimmed}
-          className="w-full h-full absolute inset-0 border-0 z-10"
-          allow="autoplay; fullscreen; picture-in-picture"
-          allowFullScreen
-          sandbox={sandboxEnabled ? sandboxSettings : undefined}
-        />
+        <div className="w-full h-full relative z-10">
+          {shieldOverlay}
+          {activeShieldBadge}
+          <iframe
+            src={trimmed}
+            className="w-full h-full absolute inset-0 border-0 z-10"
+            allow="autoplay; fullscreen; picture-in-picture"
+            allowFullScreen
+          />
+        </div>
       );
     }
   };
@@ -355,12 +508,6 @@ export default function TheaterView({
     if (others.length > 0) return others.slice(0, 5);
     return [];
   }, [allMovies, movie]);
-
-  // Set episode index back to 1 when title changes or propActiveEpisodeIndex is provided
-  useEffect(() => {
-    setActiveEpisodeIndex(propActiveEpisodeIndex ?? 0);
-    triggerLoadAnimation();
-  }, [movie, propActiveEpisodeIndex]);
 
   // Auto-hide timeline player controls
   useEffect(() => {
@@ -418,6 +565,75 @@ export default function TheaterView({
     }, 550);
     return () => clearTimeout(timer);
   };
+
+  // Synchronize HLS.js or native source with the video element
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const url = activeMedia.videoUrl;
+    if (!url) {
+      video.src = '';
+      return;
+    }
+
+    let hls: Hls | null = null;
+    const isM3U8 = url.toLowerCase().includes('.m3u8') || url.toLowerCase().includes('m3u8');
+
+    if (isM3U8) {
+      if (Hls.isSupported()) {
+        hls = new Hls({
+          maxMaxBufferLength: 30,
+          enableWorker: true,
+          lowLatencyMode: true,
+        });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (autoPlay) {
+            video.play().catch((err) => {
+              console.log('HLS Playback autoplay prevented:', err);
+            });
+          }
+        });
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                console.log('Fatal network error, trying to recover HLS load...');
+                hls?.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                console.log('Fatal media error, trying to recover HLS media...');
+                hls?.recoverMediaError();
+                break;
+              default:
+                console.error('Fatal unrecoverable HLS error:', data);
+                break;
+            }
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        // Native HLS support (Safari)
+        video.src = url;
+      } else {
+        video.src = url;
+      }
+    } else {
+      // Normal browser supported formats (MP4, WebM, Ogg, etc.)
+      video.src = url;
+    }
+
+    if (playbackSpeed !== 1) {
+      video.playbackRate = playbackSpeed;
+    }
+
+    return () => {
+      if (hls) {
+        hls.destroy();
+      }
+    };
+  }, [activeMedia.videoUrl, autoPlay, playbackSpeed]);
 
   // Video handlers
   const togglePlay = () => {
@@ -556,6 +772,24 @@ export default function TheaterView({
       exit={{ opacity: 0 }}
       className="fixed inset-0 z-50 bg-[#060606] overflow-y-auto custom-scrollbar flex flex-col font-sans text-gray-200 select-none"
     >
+      {/* Custom Toast Alert */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -10, scale: 0.95 }}
+            className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-5 py-3 rounded-lg border shadow-2xl flex items-center gap-2.5 backdrop-blur-md ${
+              toast.type === 'success'
+                ? 'bg-emerald-950/90 border-emerald-500/30 text-emerald-300 shadow-emerald-500/10'
+                : 'bg-red-950/90 border-red-500/30 text-red-300 shadow-red-500/10'
+            }`}
+          >
+            <span className="text-xs font-black uppercase tracking-wider">{toast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Lights Off Dimmable Blackout Overlay */}
       {lightOff && (
         <div 
@@ -600,11 +834,11 @@ export default function TheaterView({
       </header>
 
       {/* WATCH ROOM CONTENT GRID */}
-      <main className={`relative z-10 flex-1 w-full max-w-[1800px] mx-auto p-4 md:p-6 lg:p-8 flex flex-col xl:flex-row gap-6 ${lightOff ? 'z-[45]' : ''}`}>
+      <main className={`relative z-10 flex-1 w-full max-w-[1800px] 3xl:max-w-[2200px] 4xl:max-w-[2560px] mx-auto p-4 md:p-6 lg:p-8 flex flex-col xl:flex-row gap-6 ${lightOff ? 'z-[45]' : ''}`}>
         
         {/* COLUMN 1: LEFT SIDEBAR (EPISODE LIST) */}
         {!theaterMode && (
-          <div className="w-full xl:w-72 shrink-0 flex flex-col gap-4">
+          <div className="w-full xl:w-72 shrink-0 flex flex-col gap-4 order-2 xl:order-1">
             <div className="bg-[#0b0b0b] border border-white/10 rounded p-4 flex flex-col gap-3.5 shadow-xl">
               
               {/* Header Filters */}
@@ -689,14 +923,14 @@ export default function TheaterView({
         )}
 
         {/* COLUMN 2: CENTER PANEL (PLAYER & QUICK TOOLS & SERVERS) */}
-        <div className="flex-1 flex flex-col gap-6">
+        <div className="flex-1 flex flex-col gap-6 order-1 xl:order-2">
           
 
 
           {/* Main player box area */}
           <div
             ref={containerRef}
-            className={`relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-white/10 shadow-2xl flex items-center justify-center transition-all ${
+            className={`relative w-full aspect-video bg-black rounded-lg overflow-hidden border-2 border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.1)] shadow-2xl flex items-center justify-center transition-all ${
               lightOff ? 'ring-4 ring-indigo-500/20 shadow-indigo-500/5' : ''
             }`}
           >
@@ -742,7 +976,6 @@ export default function TheaterView({
             ) : (
               <video
                 ref={videoRef}
-                src={activeMedia.videoUrl || undefined}
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
                 onPlay={() => setIsPlaying(true)}
@@ -956,6 +1189,22 @@ export default function TheaterView({
                 <span>Auto Skip</span>
               </button>
 
+              {/* AD Blocker switch */}
+              <button
+                onClick={() => { if (soundEnabled) playTickSound(); setAdBlockingEnabled(!adBlockingEnabled); }}
+                className={`flex items-center gap-1.5 transition-colors hover:text-white ${adBlockingEnabled ? 'text-emerald-400 font-black' : ''}`}
+              >
+                <ShieldCheck className={`w-3.5 h-3.5 ${adBlockingEnabled ? 'text-emerald-400 animate-pulse' : ''}`} />
+                <span>
+                  {adBlockingEnabled ? 'ADs Block On' : 'ADs Block Off'}
+                  {adBlockingEnabled && blockedCount > 0 && (
+                    <span className="ml-1 px-1 bg-emerald-500 text-black rounded text-[9px] font-black py-0.5 inline-block">
+                      {blockedCount}
+                    </span>
+                  )}
+                </span>
+              </button>
+
               {/* Light dimmer switch */}
               <button
                 onClick={() => { if (soundEnabled) playTickSound(); setLightOff(!lightOff); }}
@@ -1040,6 +1289,83 @@ export default function TheaterView({
                 </div>
               </div>
 
+              {/* Decoder Engine Selector */}
+              <div className="hidden py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-400 shrink-0 w-32 flex items-center gap-1.5 font-sans">
+                  <span>⚙️</span> Decoder Engine
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { id: 'auto', label: 'Auto (Hls.js + HTML5)', desc: 'Automatically decodes .m3u8 streams and MP4s' },
+                    { id: 'native', label: 'Force Native Player', desc: 'Direct browser HTML5 playback' },
+                    { id: 'iframe', label: 'Force Iframe Embed', desc: 'Standard external web integration player' },
+                  ].map((engine) => {
+                    const isActive = playerEngine === engine.id;
+                    return (
+                      <button
+                        key={engine.id}
+                        onClick={() => {
+                          setPlayerEngine(engine.id as any);
+                          showLocalToast('success', `Switched decoder to ${engine.label}`);
+                          triggerLoadAnimation();
+                        }}
+                        title={engine.desc}
+                        className={`px-3.5 py-1.5 rounded text-[10px] font-extrabold uppercase tracking-wider border transition-all ${
+                          isActive
+                            ? 'bg-cyan-600 border-cyan-500 text-white font-extrabold shadow-md shadow-cyan-600/15 scale-105'
+                            : 'bg-black/50 border-white/5 text-gray-400 hover:text-white hover:bg-black/80'
+                        }`}
+                      >
+                        {engine.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Streaming Format Utilities */}
+              <div className="hidden py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-400 shrink-0 w-32 flex items-center gap-1.5 font-sans">
+                  <span>🛠️</span> Stream Tools
+                </span>
+                <div className="flex flex-wrap gap-2.5">
+                  <button
+                    onClick={() => {
+                      const url = activeMedia.videoUrl || currentEpOrMovie.videoUrl || movie.videoUrl;
+                      if (url) {
+                        navigator.clipboard.writeText(url);
+                        showLocalToast('success', 'Direct Stream URL Copied to Clipboard!');
+                      } else {
+                        showLocalToast('error', 'No direct video stream URL available');
+                      }
+                    }}
+                    className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 border border-white/10 rounded text-[10px] text-gray-300 hover:text-white font-bold uppercase transition-all flex items-center gap-1.5"
+                  >
+                    <span>🔗</span> Copy Direct Link
+                  </button>
+                  <button
+                    onClick={() => {
+                      const url = activeMedia.videoUrl || currentEpOrMovie.videoUrl || movie.videoUrl;
+                      if (url) {
+                        window.open(url, '_blank');
+                        showLocalToast('success', 'Opening direct source stream in new tab');
+                      } else {
+                        showLocalToast('error', 'No direct stream URL available');
+                      }
+                    }}
+                    className="px-3.5 py-1.5 bg-zinc-900 hover:bg-zinc-800 border border-white/10 rounded text-[10px] text-gray-300 hover:text-white font-bold uppercase transition-all flex items-center gap-1.5"
+                  >
+                    <span>📂</span> Open in New Tab / VLC
+                  </button>
+                </div>
+              </div>
+
+              {/* Format Support Status Indicator */}
+              <div className="hidden py-2.5 flex items-center gap-2 text-[9px] text-gray-500 font-bold uppercase tracking-wider">
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Supports: HLS (.m3u8), MP4, MKV (via VLC link), WebM, Dash (.mpd), Ogg, and iframe video players</span>
+              </div>
+
             </div>
           </div>
 
@@ -1047,7 +1373,7 @@ export default function TheaterView({
 
         {/* COLUMN 3: RIGHT SIDEBAR (RELATED CURATED MOVIE LIST) */}
         {!theaterMode && (
-          <div className="w-full xl:w-80 shrink-0 flex flex-col gap-4">
+          <div className="w-full xl:w-80 shrink-0 flex flex-col gap-4 order-3">
             <h3 className="text-sm font-extrabold uppercase tracking-wider text-white border-b border-white/5 pb-2">
               Related Recommendations
             </h3>

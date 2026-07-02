@@ -71,18 +71,77 @@ export default function AddEpisodeForm({ animeId, animeTitle, onSuccess, onCance
         throw new Error('Supabase client is not configured or offline.');
       }
 
-      // Securely insert the episode data into Supabase
+      let supabaseAnimeId: string | null = null;
+
+      // Try to find the anime by title first
+      const { data: animeMatch, error: matchErr } = await supabase
+        .from('animes')
+        .select('id')
+        .eq('title', animeTitle)
+        .limit(1);
+
+      if (!matchErr && animeMatch && animeMatch.length > 0) {
+        supabaseAnimeId = animeMatch[0].id;
+      } else {
+        // Check if animeId is a valid UUID
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(animeId);
+        let existsInSupabase = false;
+        if (isUuid) {
+          const { data: idMatch, error: idMatchErr } = await supabase
+            .from('animes')
+            .select('id')
+            .eq('id', animeId)
+            .limit(1);
+          if (!idMatchErr && idMatch && idMatch.length > 0) {
+            supabaseAnimeId = animeId;
+            existsInSupabase = true;
+          }
+        }
+
+        if (!existsInSupabase) {
+          // Auto-create matching anime in Supabase to maintain SQL relational integrity
+          const insertPayload: any = {
+            title: animeTitle,
+            synopsis: '',
+            release_year: 2026,
+            genre: ['Anime'],
+            poster_url: '',
+            rating: 4.5
+          };
+
+          if (isUuid) {
+            insertPayload.id = animeId;
+          }
+
+          const { data: newAnime, error: createErr } = await supabase
+            .from('animes')
+            .insert([insertPayload])
+            .select();
+          
+          if (!createErr && newAnime && newAnime[0]) {
+            supabaseAnimeId = newAnime[0].id;
+          } else {
+            console.error('Failed to create matching anime entry in Supabase:', createErr);
+            let errorMsg = createErr?.message || 'Access Denied / Row-Level Security policy restriction';
+            if (createErr?.code === '42501') {
+              errorMsg = 'Row-Level Security (RLS) violation: You are not authorized to write to "animes". Please ensure your Supabase user profile is registered with role = "admin" in public.profiles, or copy & paste the complete RLS policies from supabase_schema.sql into your Supabase SQL Editor.';
+            } else if (createErr?.code === '42P01') {
+              errorMsg = 'Relation "animes" does not exist: Please copy & paste the schema setup from supabase_schema.sql into your Supabase SQL Editor first to create the necessary tables!';
+            }
+            throw new Error(errorMsg);
+          }
+        }
+      }
+
+      // Securely insert the episode data into Supabase (using standard schema columns only)
       const { error } = await supabase
         .from('episodes')
         .insert({
-          anime_id: animeId,
+          anime_id: supabaseAnimeId,
           episode_number: data.episodeNumber,
           title: data.title,
           video_url: data.hindiUrl || data.japaneseUrl || data.englishUrl || '',
-          duration: '24m', // Default episode duration
-          audio_tracks: audioTracks, // JSONB structure
-          audioSources: audioSources, // List structure for local compatibility
-          embedHtml: data.embedHtml || null
+          duration: '24m' // Default episode duration
         });
 
       if (error) throw error;
@@ -92,7 +151,13 @@ export default function AddEpisodeForm({ animeId, animeTitle, onSuccess, onCance
       if (onSuccess) onSuccess();
     } catch (err: any) {
       console.error('Error inserting episode:', err);
-      setErrorMsg(err.message || 'An error occurred while saving the episode to the database.');
+      let errorMsg = err.message || 'An error occurred while saving the episode to the database.';
+      if (err.code === '42501') {
+        errorMsg = 'Row-Level Security (RLS) violation: You are not authorized to write to "episodes". Please ensure your Supabase user profile has role = "admin" in public.profiles, or copy & paste the complete RLS policies from supabase_schema.sql into your Supabase SQL Editor.';
+      } else if (err.code === '42P01' || errorMsg.includes('schema cache') || errorMsg.includes('Could not find the table')) {
+        errorMsg = 'Table "episodes" or "animes" does not exist in Supabase: Please copy & paste the schema setup from supabase_schema.sql into your Supabase SQL Editor first to initialize the tables!';
+      }
+      setErrorMsg(errorMsg);
     } finally {
       setLoading(false);
     }

@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../supabaseClient';
 import { Mail, Lock, User, Eye, EyeOff, Loader2, Sparkles, CheckCircle, Database, Server, ShieldCheck, Key, ArrowLeft, LogOut } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface LoginScreenProps {
   onSuccess: () => void;
   onCancel?: () => void;
+  onSwitchToAdmin?: () => void;
 }
 
-export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
+export default function LoginScreen({ onSuccess, onCancel, onSwitchToAdmin }: LoginScreenProps) {
   const { signUp, signIn, signOut, error, isDemoMode, setDemoMode, signInWithGoogle } = useAuth();
 
   const [isSignUp, setIsSignUp] = useState(false);
@@ -44,45 +45,31 @@ export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
     setLoading(true);
     try {
       if (isSignUp) {
-        const data = await signUp(email, password, fullName);
-        if (!isDemoMode && (!data || !data.session)) {
-          setSuccessMessage('Check your email and confirm your account before logging in. Please check your Spam folder if you don\'t see the email.');
-          setLoading(false);
-          return;
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+        if (signUpError) throw signUpError;
+
+        if (data?.session) {
+          await supabase.auth.signOut();
         }
-        onSuccess();
+        
+        setIsSignUp(false);
+        setPassword('');
+        setSuccessMessage('Your account has been created. Please check your email and verify your address before logging in.');
       } else {
-        await signIn(email, password);
+        const { data, error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (signInError) throw signInError;
         
-        // After sign in, check if user has MFA enrolled
-        if (!isDemoMode && supabase) {
-          const { data: aalData, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-          if (aalError) throw aalError;
-
-          if (aalData && aalData.nextLevel === 'aal2' && aalData.currentLevel === 'aal1') {
-            // User has enrolled factors, must complete MFA Challenge!
-            const { data: factorsData, error: factorsError } = await supabase.auth.mfa.listFactors();
-            if (factorsError) throw factorsError;
-
-            const verifiedFactor = factorsData?.all?.find((f: any) => f.status === 'verified');
-            if (verifiedFactor) {
-              setMfaFactorId(verifiedFactor.id);
-              setShowMfaChallenge(true);
-              setLoading(false);
-              return;
-            }
-          }
-        } else if (isDemoMode) {
-          const isSimMfa = localStorage.getItem(`animebhai_mfa_enabled_${email}`) === 'true';
-          if (isSimMfa) {
-            setMfaFactorId('mock-factor-id');
-            setShowMfaChallenge(true);
-            setLoading(false);
-            return;
-          }
+        if (data?.session) {
+          window.location.href = '/';
+        } else {
+           setLocalError('Authentication failed. Please check your credentials.');
         }
-        
-        onSuccess();
       }
     } catch (err: any) {
       setLocalError(err.message || 'An error occurred during authentication.');
@@ -167,9 +154,7 @@ export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
     setSuccessMessage(null);
     try {
       await signInWithGoogle();
-      if (isDemoMode) {
-        onSuccess();
-      }
+      onSuccess();
     } catch (err: any) {
       setLocalError(err.message || 'Google login failed.');
     } finally {
@@ -188,26 +173,6 @@ export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
         animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-md bg-[#111111]/90 backdrop-blur-xl border border-cyan-500/15 rounded-3xl p-8 shadow-[0_0_50px_rgba(6,182,212,0.1)] relative overflow-hidden"
       >
-        {/* Supabase Status Indicator header badge */}
-        <button 
-          type="button"
-          onClick={() => setDemoMode(!isDemoMode)}
-          className="absolute top-4 right-4 flex items-center gap-1.5 bg-black/40 border border-white/5 hover:border-cyan-500/30 px-3 py-1 rounded-full cursor-pointer transition-all active:scale-95 z-10"
-          title="Click to toggle between Demo Sandbox and Supabase Live auth modes"
-        >
-          {isDemoMode ? (
-            <>
-              <Server size={11} className="text-amber-400" />
-              <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider">Demo Mode</span>
-            </>
-          ) : (
-            <>
-              <Database size={11} className="text-cyan-400 animate-pulse" />
-              <span className="text-[10px] font-black uppercase text-cyan-400 tracking-wider">Supabase Live</span>
-            </>
-          )}
-        </button>
-
         {/* Brand Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 mb-4 shadow-lg shadow-cyan-500/5">
@@ -274,12 +239,6 @@ export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
               {loading ? <Loader2 size={16} className="animate-spin" /> : 'Verify Code & Log In'}
             </button>
 
-            {isDemoMode && (
-              <p className="text-[10px] text-amber-400/80 font-bold text-center leading-normal">
-                💡 Demo Mode Active: You can enter any 6-digit number to instantly authenticate!
-              </p>
-            )}
-
             <button 
               type="button"
               onClick={handleCancelChallenge}
@@ -312,7 +271,7 @@ export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
               <div className="relative">
                 <input 
                   type="email" 
-                  placeholder="otaku@animebhai.com" 
+                  placeholder="Email" 
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   required
@@ -389,38 +348,26 @@ export default function LoginScreen({ onSuccess, onCancel }: LoginScreenProps) {
           </div>
         )}
 
-        {/* Quick Demo Helper for smooth sandbox testing */}
-        {isDemoMode && !isSignUp && !showMfaChallenge && (
-          <div className="mt-6 pt-6 border-t border-white/5 space-y-3">
-            <div className="flex items-center gap-2 justify-center text-[10px] font-black text-amber-400/80 uppercase tracking-widest">
-              <CheckCircle size={11} />
-              Testing in Sandbox Mode
-            </div>
-            <button 
-              onClick={handleDemoLogin}
-              className="w-full bg-white/5 hover:bg-white/10 text-gray-300 font-bold text-xs py-2.5 rounded-xl border border-white/5 transition flex items-center justify-center gap-2"
-            >
-              Instant Demo Access (demo@animebhai.com)
-            </button>
-          </div>
-        )}
-
         {/* Toggles */}
         {!showMfaChallenge && (
-          <div className="mt-6 text-center text-xs">
-            <span className="text-gray-500 font-semibold">
-              {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
-            </span>
-            <button 
-              onClick={() => {
-                setIsSignUp(!isSignUp);
-                setLocalError(null);
-                setSuccessMessage(null);
-              }} 
-              className="text-cyan-400 hover:underline font-bold"
-            >
-              {isSignUp ? 'Sign In' : 'Create One Now'}
-            </button>
+          <div className="mt-6 text-center text-xs space-y-4">
+            <div>
+              <span className="text-gray-500 font-semibold">
+                {isSignUp ? 'Already have an account? ' : "Don't have an account? "}
+              </span>
+              <button 
+                onClick={() => {
+                  setIsSignUp(!isSignUp);
+                  setLocalError(null);
+                  setSuccessMessage(null);
+                }} 
+                className="text-cyan-400 hover:underline font-bold"
+              >
+                {isSignUp ? 'Sign In' : 'Create One Now'}
+              </button>
+            </div>
+
+
           </div>
         )}
 

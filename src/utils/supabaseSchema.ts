@@ -1,4 +1,4 @@
--- ==========================================
+export const SUPABASE_SCHEMA_SQL = `-- ==========================================
 -- SUPABASE SCHEMA SETUP WITH ROW LEVEL SECURITY
 -- Paste this script directly in the Supabase SQL Editor
 -- ==========================================
@@ -130,10 +130,12 @@ CREATE TABLE IF NOT EXISTS public.animes (
 ALTER TABLE public.animes ENABLE ROW LEVEL SECURITY;
 
 -- Animes RLS Policies:
+-- Allow anyone (even anonymous) to SELECT
 DROP POLICY IF EXISTS "Allow public read access to animes" ON public.animes;
 CREATE POLICY "Allow public read access to animes" ON public.animes
   FOR SELECT USING (true);
 
+-- Restrict write operations to admin
 DROP POLICY IF EXISTS "Allow admin write access to animes" ON public.animes;
 CREATE POLICY "Allow admin write access to animes" ON public.animes
   FOR ALL TO authenticated USING (
@@ -156,12 +158,14 @@ CREATE TABLE IF NOT EXISTS public.episodes (
 ALTER TABLE public.episodes ENABLE ROW LEVEL SECURITY;
 
 -- Episodes RLS Policies:
+-- Allow anyone (even anonymous) to SELECT
 DROP POLICY IF EXISTS "Allow public read access to episodes" ON public.episodes;
 CREATE POLICY "Allow public read access to episodes" ON public.episodes
   FOR SELECT USING (true);
 
+-- Restrict write operations to admin
 DROP POLICY IF EXISTS "Allow admin write access to episodes" ON public.episodes;
 CREATE POLICY "Allow admin write access to episodes" ON public.episodes
   FOR ALL TO authenticated USING (
     public.is_admin(auth.uid())
-  );
+  );`;

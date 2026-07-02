@@ -91,8 +91,8 @@ export default function EpisodesManager({ animeTitle, episodes, onUpdateEpisodes
       id: form.id || `ep-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       number: Number(form.number) || (episodes.length + 1),
       title: form.title.trim(),
-      duration: form.duration.trim() || '24m',
-      videoUrl: form.videoUrl.trim(),
+      duration: form.duration?.trim() || '24m',
+      videoUrl: form.videoUrl?.trim() || '',
       audioSources: cleanSources.length > 0 ? cleanSources : undefined,
       embedHtml: form.embedHtml?.trim() || undefined
     };

@@ -97,7 +97,7 @@ export default function LatestEpisodesSection({
   }, [allEpisodeUpdates, safeCurrentPage, itemsPerPage]);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 md:px-8 py-4 transition-all duration-300 ease-in-out border border-transparent hover:border-cyan-500/20 hover:bg-cyan-950/5 hover:backdrop-blur-sm hover:shadow-[0_0_30px_rgba(6,182,212,0.15)] rounded-2xl animate-fade-in">
+    <div className="max-w-7xl 2xl:max-w-[1440px] 3xl:max-w-[1800px] 4xl:max-w-[2200px] 5xl:max-w-[2560px] mx-auto w-full px-4 md:px-8 py-4 transition-all duration-300 ease-in-out border border-transparent hover:border-cyan-500/20 hover:bg-cyan-950/5 hover:backdrop-blur-sm hover:shadow-[0_0_30px_rgba(6,182,212,0.15)] rounded-2xl animate-fade-in">
       {/* Header */}
       <div className="flex items-center justify-between mb-5 border-b border-white/5 pb-3">
         <div className="flex items-center gap-2.5">
@@ -136,7 +136,7 @@ export default function LatestEpisodesSection({
       ) : (
         <>
           {/* Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 3xl:grid-cols-8 4xl:grid-cols-10 5xl:grid-cols-12 gap-4">
             {paginatedEpisodes.map(({ movie, episode, isCustom }) => (
               <div
                 key={`${movie.id}-${episode.id}`}

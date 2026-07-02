@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
-import { useAuth } from '../context/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../supabaseClient';
 import { Mail, Lock, Loader2, ShieldCheck, ArrowLeft, Key, AlertCircle, CheckCircle } from 'lucide-react';
 import { motion } from 'motion/react';
+import { isAdminEmail, isAdminPassword } from '../lib/hash';
 
 interface AdminLoginScreenProps {
   onSuccess: () => void;
   onCancel: () => void;
+  onSwitchToUser?: () => void;
 }
 
-export default function AdminLoginScreen({ onSuccess, onCancel }: AdminLoginScreenProps) {
-  const { signIn, isDemoMode } = useAuth();
+export default function AdminLoginScreen({ onSuccess, onCancel, onSwitchToUser }: AdminLoginScreenProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
@@ -22,23 +22,27 @@ export default function AdminLoginScreen({ onSuccess, onCancel }: AdminLoginScre
     setLocalError(null);
     setSuccessMessage(null);
 
-    const targetEmail = 'PrajwalGadade96@gmail.com';
-    const targetPassword = 'Prajwal@@96!@#$';
-
     if (!email || !password) {
       setLocalError('Please fill out all required fields.');
       return;
     }
 
-    // Verify admin credentials
-    if (email.toLowerCase() !== targetEmail.toLowerCase() || password !== targetPassword) {
+    // Verify admin credentials via secure hashes
+    const isEmailAdminValid = await isAdminEmail(email);
+    const isPasswordAdminValid = await isAdminPassword(password);
+
+    if (!isEmailAdminValid || !isPasswordAdminValid) {
       setLocalError('Unauthorized. Only registered administrator credentials are valid for this portal.');
       return;
     }
 
     setLoading(true);
     try {
-      await signIn(email, password);
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+      if (signInError) throw signInError;
       showSuccessAndProceed();
     } catch (err: any) {
       setLocalError(err.message || 'An error occurred during authentication.');
@@ -55,7 +59,7 @@ export default function AdminLoginScreen({ onSuccess, onCancel }: AdminLoginScre
   };
 
   const prefillAdminCredentials = () => {
-    setEmail('PrajwalGadade96@gmail.com');
+    setEmail('PrajwalGadade20@gmail.com');
     setPassword('Prajwal@@96!@#$');
   };
 
@@ -158,6 +162,19 @@ export default function AdminLoginScreen({ onSuccess, onCancel }: AdminLoginScre
             Authorize Session
           </button>
         </form>
+
+        {onSwitchToUser && (
+          <div className="mt-4 pt-4 border-t border-white/5 text-center">
+            <button
+              type="button"
+              onClick={onSwitchToUser}
+              className="inline-flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-white font-black uppercase tracking-wider transition hover:underline"
+            >
+              <ArrowLeft size={12} />
+              <span>Normal User Login</span>
+            </button>
+          </div>
+        )}
 
         {window.location.search.includes('helper=true') && (
           <div className="mt-6 pt-6 border-t border-white/5 space-y-3 text-center">

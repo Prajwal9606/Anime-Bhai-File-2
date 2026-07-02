@@ -7,7 +7,6 @@ import { useState, useEffect, useRef } from 'react';
 import { db, handleFirestoreError, OperationType } from './lib/firebase';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { Video } from './types';
-import { MOCK_VIDEOS } from './data/mockData';
 import { Search, User, LogOut, Heart, Film, Tv, Compass, ShieldAlert, Sparkles, X, ChevronRight, ArrowLeft, Shield, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -17,22 +16,27 @@ import AdminPanel from './components/AdminPanel';
 import AnimeCard from './components/AnimeCard';
 import ShowDetails from './components/ShowDetails';
 import TheaterView from './components/TheaterView';
+import UserDashboard from './components/UserDashboard';
 import LoginScreen from './components/LoginScreen';
-import SecuritySettings from './components/SecuritySettings';
 import AdminLoginScreen from './components/AdminLoginScreen';
 import LatestEpisodesSection from './components/LatestEpisodesSection';
 import JustCompletedSection from './components/JustCompletedSection';
 import JustCompletedMoviesSection from './components/JustCompletedMoviesSection';
+import { syncAndAutoUpdateVideos } from './utils/animeImageResolver';
 
 function AnimeBhaiApp() {
   const { user, signOut, isDemoMode } = useAuth();
   
   const isAdmin = user?.role === 'admin' || 
                   user?.email?.toLowerCase() === 'prajwalgadade9606@gmail.com'.toLowerCase() ||
-                  user?.email?.toLowerCase() === 'prajwalgadade96@gmail.com'.toLowerCase();
+                  user?.email?.toLowerCase() === 'prajwalgadade96@gmail.com'.toLowerCase() ||
+                  user?.email?.toLowerCase() === 'prajwalgadade20@gmail.com'.toLowerCase();
 
   const [firestoreVideos, setFirestoreVideos] = useState<Video[]>([]);
-  const [allVideos, setAllVideos] = useState<Video[]>(MOCK_VIDEOS);
+  const [allVideos, setAllVideos] = useState<Video[]>([]);
+  const [resolvedImages, setResolvedImages] = useState<Record<string, { thumbnail: string; backdrop: string }>>({});
+  const [autoUpdatingCovers, setAutoUpdatingCovers] = useState(false);
+  const [coverUpdateProgress, setCoverUpdateProgress] = useState('');
   const [bannerImage, setBannerImage] = useState<string | null>(null);
 
   // Fetch AniList banner image
@@ -50,21 +54,29 @@ function AnimeBhaiApp() {
         try {
           const response = await fetch('https://graphql.anilist.co', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
             body: JSON.stringify({ query, variables })
           });
+          
+          if (!response.ok) {
+            return;
+          }
+          
           const data = await response.json();
           if (data.data?.Media?.bannerImage) {
             setBannerImage(data.data.Media.bannerImage);
           }
         } catch (err) {
-          console.error("AniList fetch error:", err);
+          // Silently ignore fetch errors (e.g., blocked by ad-blocker or CORS) to prevent UI errors
         }
       };
       fetchBanner();
     }
   }, [allVideos]);
-  const [activeTab, setActiveTab] = useState<'home' | 'anime' | 'movies' | 'favorites' | 'security'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'anime' | 'movies' | 'favorites' | 'dashboard'>('home');
   const [aal2Verified, setAal2Verified] = useState<boolean>(true);
   const [checkingAal, setCheckingAal] = useState<boolean>(false);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
@@ -135,11 +147,12 @@ function AnimeBhaiApp() {
 
   const lastUserEmailRef = useRef<string | null>(null);
 
-  // Automatically open Admin Panel when an admin logs in
+  // Maintain home tab when user loads site / logs in
   useEffect(() => {
     if (user) {
-      if (isAdmin && lastUserEmailRef.current !== user.email) {
-        setShowAdmin(true);
+      if (lastUserEmailRef.current !== user.email) {
+        setActiveTab('home');
+        setShowAdmin(false);
         setShowLoginTab(false);
         setShowAdminLogin(false);
       }
@@ -147,7 +160,7 @@ function AnimeBhaiApp() {
     } else {
       lastUserEmailRef.current = null;
     }
-  }, [user, isAdmin]);
+  }, [user]);
 
   // Close login overlay when user successfully logs in
   useEffect(() => {
@@ -158,18 +171,24 @@ function AnimeBhaiApp() {
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
   // Favorites state
-  const [favorites, setFavorites] = useState<string[]>(() => {
-    const saved = localStorage.getItem('animebhai_favorites');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [favorites, setFavorites] = useState<string[]>([]);
 
-  // Redirect to home if user logs out while viewing favorites or security settings
+  // Sync / Load favorites when user changes to ensure privacy across different accounts
   useEffect(() => {
-    if (!user && (activeTab === 'favorites' || activeTab === 'security')) {
+    const key = user ? `animebhai_favorites_${user.id || user.email}` : 'animebhai_favorites_guest';
+    const saved = localStorage.getItem(key);
+    setFavorites(saved ? JSON.parse(saved) : []);
+  }, [user]);
+
+  // Redirect to home if user logs out while viewing favorites or dashboard
+  useEffect(() => {
+    if (!user && (activeTab === 'favorites' || activeTab === 'dashboard')) {
       setActiveTab('home');
     }
   }, [user, activeTab]);
@@ -235,22 +254,112 @@ function AnimeBhaiApp() {
     return unsubscribe;
   }, []);
 
-  // Merge Firestore Videos and Mock Videos
+  // Update allVideos with resolved high-quality images from firestoreVideos
   useEffect(() => {
-    const merged = [...firestoreVideos];
-    MOCK_VIDEOS.forEach(mockVid => {
-      if (!merged.some(v => v.title.toLowerCase() === mockVid.title.toLowerCase())) {
-        merged.push(mockVid);
+    const merged = firestoreVideos.map(vid => {
+      const resolved = resolvedImages[vid.id];
+      if (resolved) {
+        return {
+          ...vid,
+          thumbnail: resolved.thumbnail,
+          backdrop: resolved.backdrop || resolved.thumbnail
+        };
       }
+      return vid;
     });
-    setAllVideos(merged);
-  }, [firestoreVideos]);
 
-  // Sync favorites to local storage
+    setAllVideos(merged);
+  }, [firestoreVideos, resolvedImages]);
+
+  // Background Auto-Update for placeholder cover images via Jikan API
+  useEffect(() => {
+    if (allVideos.length === 0) return;
+
+    let isSubscribed = true;
+
+    const runAutoUpdate = async () => {
+      // Short delay so first render loads instantly
+      await new Promise(r => setTimeout(r, 1500));
+      if (!isSubscribed) return;
+
+      const placeholderVids = allVideos.filter(v => 
+        !v.thumbnail || 
+        v.thumbnail.includes('unsplash.com') || 
+        v.thumbnail.includes('placeholder')
+      );
+
+      if (placeholderVids.length === 0) return;
+
+      setAutoUpdatingCovers(true);
+      setCoverUpdateProgress(`Enriching ${placeholderVids.length} cover images...`);
+
+      try {
+        await syncAndAutoUpdateVideos(
+          allVideos,
+          (id, thumbnail, backdrop) => {
+            if (!isSubscribed) return;
+            setResolvedImages(prev => ({
+              ...prev,
+              [id]: { thumbnail, backdrop }
+            }));
+          },
+          (msg) => {
+            if (!isSubscribed) return;
+            setCoverUpdateProgress(msg);
+          }
+        );
+      } catch (err) {
+        console.error('Auto-update cover images error:', err);
+      } finally {
+        if (isSubscribed) {
+          setTimeout(() => {
+            if (isSubscribed) {
+              setAutoUpdatingCovers(false);
+            }
+          }, 3500);
+        }
+      }
+    };
+
+    runAutoUpdate();
+
+    return () => {
+      isSubscribed = false;
+    };
+  }, [firestoreVideos.length]);
+
+  const triggerManualCoverSync = async () => {
+    if (autoUpdatingCovers) return;
+    setAutoUpdatingCovers(true);
+    setCoverUpdateProgress("Starting API lookup...");
+    try {
+      await syncAndAutoUpdateVideos(
+        allVideos,
+        (id, thumbnail, backdrop) => {
+          setResolvedImages(prev => ({
+            ...prev,
+            [id]: { thumbnail, backdrop }
+          }));
+        },
+        (msg) => {
+          setCoverUpdateProgress(msg);
+        }
+      );
+    } catch (err) {
+      console.error('Manual cover sync error:', err);
+    } finally {
+      setTimeout(() => {
+        setAutoUpdatingCovers(false);
+      }, 3500);
+    }
+  };
+
+  // Sync favorites to user-specific local storage
   const handleToggleFavorite = (id: string) => {
     setFavorites(prev => {
       const next = prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id];
-      localStorage.setItem('animebhai_favorites', JSON.stringify(next));
+      const key = user ? `animebhai_favorites_${user.id || user.email}` : 'animebhai_favorites_guest';
+      localStorage.setItem(key, JSON.stringify(next));
       return next;
     });
   };
@@ -260,27 +369,37 @@ function AnimeBhaiApp() {
     function handleClickOutside(event: MouseEvent) {
       if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
         setShowSuggestions(false);
+        setIsSearchExpanded(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Filter videos according to tab and query
+  // Dynamically extract all unique genres from allVideos
+  const allUniqueGenres = Array.from(
+    new Set(allVideos.flatMap(v => v.genres || []))
+  ).filter(Boolean).sort();
+
+  // Filter videos according to tab, query, and selected genre
   const filteredVideos = allVideos.filter(video => {
     if (activeTab === 'anime' && video.category !== 'anime') return false;
     if (activeTab === 'movies' && video.category !== 'movie') return false;
     if (activeTab === 'favorites' && !favorites.includes(video.id)) return false;
+    if (selectedGenre && (!video.genres || !video.genres.includes(selectedGenre))) return false;
     return true;
   });
 
-  // Search filter
-  const searchResults = searchQuery.trim() === '' 
-    ? [] 
-    : allVideos.filter(v => 
-        v.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-        (v.genres && v.genres.some(g => g.toLowerCase().includes(searchQuery.toLowerCase())))
-      );
+  // Search filter supporting term and genre combination
+  const searchResults = allVideos.filter(v => {
+    const matchesQuery = searchQuery.trim() === '' || 
+      v.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      v.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (v.genres && v.genres.some(g => g.toLowerCase().includes(searchQuery.toLowerCase())));
+    
+    const matchesGenre = !selectedGenre || (v.genres && v.genres.includes(selectedGenre));
+    return matchesQuery && matchesGenre;
+  });
 
   const handleSelectVideo = (video: Video) => {
     setSelectedVideo(video);
@@ -309,7 +428,7 @@ function AnimeBhaiApp() {
       
       {/* Sticky Header Navigation */}
       <header className="sticky top-0 z-50 bg-[#050505]/85 backdrop-blur-md border-b border-white/5 py-4 px-6 transition duration-300">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="max-w-7xl 2xl:max-w-[1440px] 3xl:max-w-[1800px] 4xl:max-w-[2200px] 5xl:max-w-[2560px] mx-auto w-full flex flex-col md:flex-row items-center justify-between gap-4">
           
           {/* Logo & Tab Links */}
           <div className="flex flex-col sm:flex-row items-center gap-6 w-full md:w-auto">
@@ -331,8 +450,7 @@ function AnimeBhaiApp() {
                 { id: 'anime', label: 'Anime Series', icon: Tv },
                 { id: 'movies', label: 'Movies', icon: Film },
                 ...(user ? [
-                  { id: 'favorites', label: 'My List', icon: Heart },
-                  { id: 'security', label: '2FA Security', icon: Shield }
+                  { id: 'favorites', label: 'My List', icon: Heart }
                 ] : [])
               ].map((tab) => {
                 const Icon = tab.icon;
@@ -359,17 +477,39 @@ function AnimeBhaiApp() {
                 );
               })}
             </nav>
+
+
           </div>
 
           {/* Search, Admin Access, & User Controls */}
-          <div className="flex items-center justify-end gap-4 w-full md:w-auto">
+          <div className="flex items-center justify-end gap-3 w-auto">
             
             {/* Search Input block with auto-suggestions */}
-            <div ref={searchRef} className="relative w-full sm:w-64">
-              <div className="relative">
+            <div ref={searchRef} className={`relative flex items-center justify-end transition-all duration-300 ${isSearchExpanded ? 'w-48 sm:w-64' : 'w-auto'}`}>
+              
+              {/* Icon-only Search button for Tablet & Mobile (below lg) */}
+              <button
+                type="button"
+                onClick={() => setIsSearchExpanded(true)}
+                className={`lg:hidden p-2 rounded-xl transition-colors cursor-pointer ${
+                  isSearchExpanded 
+                    ? 'hidden' 
+                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                }`}
+                title="Search Anime"
+              >
+                <Search size={16} />
+              </button>
+
+              {/* Collapsible search input container */}
+              <div className={`relative transition-all duration-300 ${
+                isSearchExpanded 
+                  ? 'flex items-center w-full' 
+                  : 'hidden lg:flex items-center lg:w-64'
+              }`}>
                 <input 
                   type="text" 
-                  placeholder="Search title, genre..." 
+                  placeholder="Search title..." 
                   value={searchQuery}
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
@@ -377,49 +517,117 @@ function AnimeBhaiApp() {
                   }}
                   onFocus={() => setShowSuggestions(true)}
                   className="w-full bg-[#111111] text-xs font-semibold text-white pl-9 pr-8 py-2 rounded-full border border-white/5 focus:border-cyan-500/40 focus:bg-[#151515] outline-none transition"
+                  autoFocus={isSearchExpanded}
                 />
                 <Search size={14} className="absolute left-3.5 top-1/2 transform -translate-y-1/2 text-gray-500" />
-                {searchQuery && (
-                  <button 
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white"
-                  >
-                    <X size={12} />
-                  </button>
-                )}
+                
+                <button 
+                  onClick={() => {
+                    setSearchQuery('');
+                    setIsSearchExpanded(false);
+                    setShowSuggestions(false);
+                  }}
+                  className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-white cursor-pointer"
+                  title="Close Search"
+                >
+                  <X size={12} />
+                </button>
               </div>
 
               {/* Suggestions Dropdown */}
-              {showSuggestions && searchQuery.trim() !== '' && (
-                <div className="absolute top-full right-0 mt-2 w-full sm:w-80 bg-[#111111] border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-50 max-h-[360px] overflow-y-auto">
-                  {searchResults.length > 0 ? (
-                    <div className="p-2 space-y-1">
-                      <span className="block text-[10px] font-black uppercase text-cyan-400 tracking-wider px-3 py-1.5">
-                        Matches Found ({searchResults.length})
+              {showSuggestions && (
+                <div className="absolute top-full right-0 mt-2 w-full sm:w-80 bg-[#111111] border border-white/10 rounded-2xl overflow-hidden shadow-2xl z-50 max-h-[420px] flex flex-col">
+                  
+                  {/* Genre Quick Filters inside Search */}
+                  {allUniqueGenres.length > 0 && (
+                    <div className="p-3 bg-[#141414] border-b border-white/5 flex flex-col gap-1.5 flex-shrink-0">
+                      <span className="block text-[9px] font-black uppercase text-gray-500 tracking-wider">
+                        Filter by Genre
                       </span>
-                      {searchResults.map(video => (
-                        <div 
-                          key={video.id}
-                          onClick={() => {
-                            handleSelectVideo(video);
-                            setShowSuggestions(false);
-                            setSearchQuery('');
-                          }}
-                          className="flex gap-3 p-2 hover:bg-white/5 rounded-xl cursor-pointer transition"
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedGenre(null)}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider whitespace-nowrap transition cursor-pointer border ${
+                            !selectedGenre
+                              ? 'bg-cyan-500 text-black border-cyan-400/20 shadow-md font-black'
+                              : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 border-white/5 font-semibold'
+                          }`}
                         >
-                          <img src={video.thumbnail || undefined} alt={video.title} className="w-14 aspect-video object-cover rounded-lg bg-zinc-950 flex-shrink-0" />
-                          <div className="overflow-hidden">
-                            <h4 className="text-xs font-black text-white truncate">{video.title}</h4>
-                            <span className="text-[10px] text-gray-400 capitalize">{video.category} • {video.year}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="p-4 text-center text-xs text-gray-500 font-bold">
-                      No titles match "{searchQuery}"
+                          All
+                        </button>
+                        {allUniqueGenres.map(genre => (
+                          <button
+                            type="button"
+                            key={genre}
+                            onClick={() => setSelectedGenre(selectedGenre === genre ? null : genre)}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider whitespace-nowrap transition cursor-pointer border ${
+                              selectedGenre === genre
+                                ? 'bg-cyan-500 text-black border-cyan-400/20 shadow-md font-black'
+                                : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 border-white/5 font-semibold'
+                            }`}
+                          >
+                            {genre}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
+
+                  <div className="p-2 space-y-1 overflow-y-auto flex-grow">
+                    {(() => {
+                      const showSpotlightInSearch = searchQuery.trim() === '' && !selectedGenre;
+                      const searchResultsToDisplay = showSpotlightInSearch 
+                        ? allVideos.slice(0, 5) 
+                        : searchResults;
+
+                      if (searchResultsToDisplay.length > 0) {
+                        return (
+                          <>
+                            <span className="block text-[10px] font-black uppercase text-cyan-400 tracking-wider px-3 py-1.5">
+                              {showSpotlightInSearch 
+                                ? '⭐ Spotlight & Popular' 
+                                : selectedGenre && searchQuery.trim() === ''
+                                  ? `${selectedGenre} matches (${searchResultsToDisplay.length})` 
+                                  : `Matches Found (${searchResultsToDisplay.length})`}
+                            </span>
+                            {searchResultsToDisplay.map(video => (
+                              <div 
+                                key={video.id}
+                                onClick={() => {
+                                  handleSelectVideo(video);
+                                  setShowSuggestions(false);
+                                  setSearchQuery('');
+                                }}
+                                className="flex gap-3 p-2 hover:bg-white/5 rounded-xl cursor-pointer transition"
+                              >
+                                <img 
+                                  src={video.thumbnail || undefined} 
+                                  alt={video.title} 
+                                  className="w-14 aspect-video object-cover rounded-lg bg-zinc-950 flex-shrink-0" 
+                                  referrerPolicy="no-referrer"
+                                />
+                                <div className="overflow-hidden">
+                                  <h4 className="text-xs font-black text-white truncate">{video.title}</h4>
+                                  <span className="text-[10px] text-gray-400 capitalize">{video.category} • {video.year}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </>
+                        );
+                      } else {
+                        return (
+                          <div className="p-4 text-center text-xs text-gray-500 font-bold">
+                            {selectedGenre 
+                              ? `No ${selectedGenre} titles match "${searchQuery}"`
+                              : `No titles match "${searchQuery}"`
+                            }
+                          </div>
+                        );
+                      }
+                    })()}
+                  </div>
+
                 </div>
               )}
             </div>
@@ -448,33 +656,53 @@ function AnimeBhaiApp() {
             {/* Profile authentication controls */}
             {user ? (
               <div className="flex items-center gap-2.5 border-l border-white/5 pl-4 group/profile relative">
-                <div className="flex items-center gap-2 cursor-pointer">
+                <div 
+                  className="flex items-center gap-2 cursor-pointer hover:opacity-85 transition"
+                  onClick={() => {
+                    setActiveTab('dashboard');
+                    setShowAdmin(false);
+                    setSelectedVideo(null);
+                    setPlayingVideo(null);
+                    setShowLoginTab(false);
+                  }}
+                  title="View User Dashboard"
+                >
                   <img src={user.photoURL || 'https://api.dicebear.com/7.x/bottts/svg?seed=fallback'} alt="User" className="w-8 h-8 rounded-xl border border-cyan-500/20" />
                   <div className="hidden lg:block text-left">
                     <span className="block text-[10px] font-black uppercase text-cyan-400 tracking-wider">Online</span>
                     <span className="block text-[11px] font-bold text-gray-300 max-w-[100px] truncate">{user.displayName || user.email}</span>
                   </div>
                 </div>
-                <button 
-                  onClick={() => signOut()}
-                  className="p-2 text-gray-400 hover:text-red-500 rounded-xl hover:bg-white/5 transition"
-                  title="Sign Out"
-                >
-                  <LogOut size={16} />
-                </button>
               </div>
             ) : (
-              <button 
-                onClick={() => {
-                  setShowLoginTab(true);
-                  setSelectedVideo(null);
-                  setPlayingVideo(null);
-                  setShowAdmin(false);
-                }} 
-                className="bg-cyan-500 text-black px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider hover:bg-cyan-400 transition"
-              >
-                Sign In
-              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => {
+                    setShowAdminLogin(true);
+                    setShowLoginTab(false);
+                    setSelectedVideo(null);
+                    setPlayingVideo(null);
+                    setShowAdmin(false);
+                  }} 
+                  className="hidden bg-black/40 text-gray-400 border border-white/5 hover:text-cyan-400 hover:border-cyan-400/20 px-3 py-1.5 rounded-full text-xs font-black uppercase tracking-wider transition items-center gap-1 cursor-pointer"
+                  title="Admin Secure Gateway"
+                >
+                  <Shield size={12} />
+                  <span>Admin</span>
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowLoginTab(true);
+                    setShowAdminLogin(false);
+                    setSelectedVideo(null);
+                    setPlayingVideo(null);
+                    setShowAdmin(false);
+                  }} 
+                  className="bg-cyan-500 text-black px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider hover:bg-cyan-400 transition cursor-pointer"
+                >
+                  Sign In
+                </button>
+              </div>
             )}
 
           </div>
@@ -495,28 +723,51 @@ function AnimeBhaiApp() {
           />
         ))}
 
-        {showAdminLogin ? (
+        {activeTab === 'dashboard' && user ? (
+          <UserDashboard 
+            allVideos={allVideos} 
+            favorites={favorites} 
+            onSelectVideo={(video) => {
+              setSelectedVideo(video);
+              setActiveTab('home');
+            }}
+            onClose={() => setActiveTab('home')}
+          />
+        ) : showAdminLogin ? (
           <AdminLoginScreen 
             onSuccess={() => {
               setShowAdminLogin(false);
               setShowAdmin(true);
             }}
             onCancel={() => setShowAdminLogin(false)}
+            onSwitchToUser={() => {
+              setShowAdminLogin(false);
+              setShowLoginTab(true);
+            }}
           />
         ) : showLoginTab ? (
           <LoginScreen 
             onSuccess={() => setShowLoginTab(false)}
             onCancel={() => setShowLoginTab(false)}
+            onSwitchToAdmin={() => {
+              setShowLoginTab(false);
+              setShowAdminLogin(true);
+            }}
           />
         ) : showAdmin && isAdmin ? (
-          <div className="max-w-7xl mx-auto">
+          <div className="max-w-7xl 2xl:max-w-[1440px] 3xl:max-w-[1800px] 4xl:max-w-[2200px] 5xl:max-w-[2560px] mx-auto w-full admin-panel-container">
             <button 
               onClick={() => setShowAdmin(false)}
               className="mb-6 inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-cyan-400 font-extrabold uppercase tracking-widest transition"
             >
               <ArrowLeft size={14} /> Back to dashboard
             </button>
-            <AdminPanel videos={allVideos} />
+            <AdminPanel 
+              videos={allVideos} 
+              onSyncPosters={triggerManualCoverSync}
+              isSyncingPosters={autoUpdatingCovers}
+              syncProgressMessage={coverUpdateProgress}
+            />
           </div>
         ) : playingVideo ? (
           // 1. THEATER PLAYER VIEW
@@ -552,18 +803,14 @@ function AnimeBhaiApp() {
           />
         ) : (
           // 3. DASHBOARD / GRID TABS VIEW
-          <div className="max-w-7xl mx-auto space-y-12">
-            
-            {activeTab === 'security' ? (
-              <SecuritySettings />
-            ) : (
-              <>
+          <div className="max-w-7xl 2xl:max-w-[1440px] 3xl:max-w-[1800px] 4xl:max-w-[2200px] 5xl:max-w-[2560px] mx-auto w-full space-y-12">
+            <>
                 {/* Show dynamic billboard hero banner strictly in Home Tab */}
-                {activeTab === 'home' && allVideos.length > 0 && (
+                {activeTab === 'home' && allVideos.length > 0 && !selectedGenre && (
                   <motion.div 
                     initial={{ opacity: 0, y: 15 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="rounded-3xl overflow-hidden relative h-[380px] md:h-[480px] flex items-end p-6 md:p-12 border border-white/5 shadow-2xl shadow-cyan-500/5 group/hero"
+                    className="rounded-3xl overflow-hidden relative h-[320px] sm:h-[380px] md:h-[480px] 2xl:h-[580px] 3xl:h-[680px] 4xl:h-[800px] flex items-end p-6 md:p-12 2xl:p-16 border border-white/5 shadow-2xl shadow-cyan-500/5 group/hero"
                   >
                     {/* Backdrop cover and fades */}
                     <div className="absolute inset-0">
@@ -577,38 +824,38 @@ function AnimeBhaiApp() {
                       <div className="absolute inset-0 bg-gradient-to-r from-[#050505]/90 via-transparent to-transparent"></div>
                     </div>
 
-                    <div className="relative z-10 max-w-2xl space-y-4">
+                    <div className="relative z-10 max-w-2xl 2xl:max-w-4xl 3xl:max-w-6xl space-y-3 md:space-y-6">
                       {/* Glowing Spotlight Badge */}
-                      <div className="inline-flex items-center gap-1.5 bg-cyan-500/10 border border-cyan-400/35 text-cyan-400 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest shadow-md">
-                        <Sparkles size={11} className="animate-pulse" />
+                      <div className="inline-flex items-center gap-1 md:gap-1.5 bg-cyan-500/10 border border-cyan-400/35 text-cyan-400 text-[8px] md:text-[10px] 2xl:text-xs font-black px-2 md:px-3 py-0.5 md:py-1 rounded-full uppercase tracking-widest shadow-md">
+                        <Sparkles className="w-2.5 h-2.5 md:w-[11px] md:h-[11px] animate-pulse" />
                         Spotlight No.1
                       </div>
 
-                      <h2 className="text-3xl md:text-5xl font-black text-white tracking-tighter leading-none">
+                      <h2 className="text-xl sm:text-3xl md:text-5xl 2xl:text-6xl 3xl:text-7xl font-black text-white tracking-tighter leading-none">
                         {allVideos[0].title}
                       </h2>
 
-                      <p className="text-gray-300 text-xs md:text-sm leading-relaxed font-semibold line-clamp-3">
+                      <p className="text-gray-300 text-[9px] sm:text-[10px] md:text-sm 2xl:text-base leading-relaxed font-semibold line-clamp-2 md:line-clamp-3">
                         {allVideos[0].description}
                       </p>
 
-                      <div className="flex flex-wrap items-center gap-3 pt-2">
+                      <div className="flex flex-wrap items-center gap-1.5 md:gap-3 pt-1 md:pt-2">
                         <button 
                           onClick={() => handleSelectVideo(allVideos[0])}
-                          className="bg-cyan-500 hover:bg-cyan-400 text-black font-black text-xs uppercase tracking-widest px-6 py-3 rounded-xl flex items-center gap-2 shadow-lg shadow-cyan-500/15 transition transform hover:scale-105"
+                          className="bg-cyan-500 hover:bg-cyan-400 text-black font-black text-[8px] md:text-xs uppercase tracking-widest px-3 py-2 md:px-6 md:py-3 rounded-lg md:rounded-xl flex items-center gap-1 md:gap-2 shadow-lg shadow-cyan-500/15 transition transform hover:scale-105"
                         >
                           Watch Now
-                          <ChevronRight size={14} />
+                          <ChevronRight className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" />
                         </button>
                         <button 
                           onClick={() => handleToggleFavorite(allVideos[0].id)}
-                          className={`px-4 py-3 rounded-xl border font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 transition ${
+                          className={`px-3 py-2 md:px-4 md:py-3 rounded-lg md:rounded-xl border font-bold text-[8px] md:text-xs uppercase tracking-wider flex items-center gap-1 md:gap-1.5 transition ${
                             favorites.includes(allVideos[0].id)
                               ? 'bg-red-500/15 border-red-500/30 text-red-400'
                               : 'bg-white/5 border-white/5 text-gray-300 hover:bg-white/10 hover:border-white/15'
                           }`}
                         >
-                          <Heart size={14} fill={favorites.includes(allVideos[0].id) ? "currentColor" : "none"} />
+                          <Heart className="w-2.5 h-2.5 md:w-3.5 md:h-3.5" fill={favorites.includes(allVideos[0].id) ? "currentColor" : "none"} />
                           {favorites.includes(allVideos[0].id) ? "In My List" : "Add to List"}
                         </button>
                       </div>
@@ -616,50 +863,123 @@ function AnimeBhaiApp() {
                   </motion.div>
                 )}
 
+                {/* Genre Filter Row */}
+                {allVideos.length > 0 && (
+                  <div className="bg-[#111111]/40 border border-white/5 rounded-2xl p-4 flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black uppercase text-gray-400 tracking-wider flex items-center gap-1.5">
+                        <Sparkles size={12} className="text-cyan-400 animate-pulse" />
+                        Explore Categories & Genres
+                      </span>
+                      {selectedGenre && (
+                        <button
+                          onClick={() => setSelectedGenre(null)}
+                          className="text-[10px] font-black text-cyan-400 hover:text-cyan-300 transition uppercase cursor-pointer"
+                        >
+                          Clear Filter
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                      <button
+                        onClick={() => setSelectedGenre(null)}
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider whitespace-nowrap transition cursor-pointer border ${
+                          !selectedGenre
+                            ? 'bg-cyan-500 text-black border-cyan-400/20 shadow-lg shadow-cyan-500/15 font-black'
+                            : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 border-white/5 font-semibold'
+                        }`}
+                      >
+                        All Genres
+                      </button>
+                      {allUniqueGenres.map(genre => (
+                        <button
+                          key={genre}
+                          onClick={() => setSelectedGenre(selectedGenre === genre ? null : genre)}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider whitespace-nowrap transition cursor-pointer border ${
+                            selectedGenre === genre
+                              ? 'bg-cyan-500 text-black border-cyan-400/20 shadow-lg shadow-cyan-500/15 font-black'
+                              : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 border-white/5 font-semibold'
+                          }`}
+                        >
+                          {genre}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Lists categorized view */}
                 {activeTab === 'home' ? (
-                  <div className="space-y-12">
-                    {/* Latest Episode Updates */}
-                    <LatestEpisodesSection
-                      movies={allVideos}
-                      onPlayEpisode={(movie, episodeIndex) => {
-                        setSelectedVideo(movie);
-                        setPlayingVideo(movie);
-                        setActiveEpisodeIndex(episodeIndex);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
-                      isAdmin={isAdmin}
-                      onAdminClick={() => setShowAdmin(true)}
-                    />
+                  selectedGenre ? (
+                    <div className="space-y-6">
+                      <div className="flex items-center gap-2 border-b border-white/5 pb-4">
+                        <div className="w-1.5 h-6 bg-cyan-500 rounded-full" />
+                        <h3 className="text-2xl font-black tracking-tight text-white uppercase">
+                          {selectedGenre} Titles
+                        </h3>
+                      </div>
+                      {filteredVideos.length > 0 ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 3xl:grid-cols-7 4xl:grid-cols-8 5xl:grid-cols-10 gap-6">
+                          {filteredVideos.map(video => (
+                            <AnimeCard 
+                              key={video.id} 
+                              video={video} 
+                              onClick={() => handleSelectVideo(video)} 
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="py-20 text-center">
+                          <p className="text-gray-500 font-bold text-sm">
+                            No titles found with genre "{selectedGenre}".
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-12">
+                      {/* Latest Episode Updates */}
+                      <LatestEpisodesSection
+                        movies={allVideos}
+                        onPlayEpisode={(movie, episodeIndex) => {
+                          setSelectedVideo(movie);
+                          setPlayingVideo(movie);
+                          setActiveEpisodeIndex(episodeIndex);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        isAdmin={isAdmin}
+                        onAdminClick={() => setShowAdmin(true)}
+                      />
 
-                    {/* Just Completed Series */}
-                    <JustCompletedSection
-                      movies={allVideos}
-                      onPlayMovie={(movie) => {
-                        setSelectedVideo(movie);
-                        setPlayingVideo(movie);
-                        setActiveEpisodeIndex(0);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
-                      onInspectMovie={(movie) => {
-                        handleSelectVideo(movie);
-                      }}
-                    />
+                      {/* Just Completed Series */}
+                      <JustCompletedSection
+                        movies={allVideos}
+                        onPlayMovie={(movie) => {
+                          setSelectedVideo(movie);
+                          setPlayingVideo(movie);
+                          setActiveEpisodeIndex(0);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        onInspectMovie={(movie) => {
+                          handleSelectVideo(movie);
+                        }}
+                      />
 
-                    {/* New Movies */}
-                    <JustCompletedMoviesSection
-                      movies={allVideos}
-                      onPlayMovie={(movie) => {
-                        setSelectedVideo(movie);
-                        setPlayingVideo(movie);
-                        setActiveEpisodeIndex(0);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      }}
-                      onInspectMovie={(movie) => {
-                        handleSelectVideo(movie);
-                      }}
-                    />
-                  </div>
+                      {/* New Movies */}
+                      <JustCompletedMoviesSection
+                        movies={allVideos}
+                        onPlayMovie={(movie) => {
+                          setSelectedVideo(movie);
+                          setPlayingVideo(movie);
+                          setActiveEpisodeIndex(0);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        onInspectMovie={(movie) => {
+                          handleSelectVideo(movie);
+                        }}
+                      />
+                    </div>
+                  )
                 ) : (
                   // Individual tab grids
                   <div className="space-y-6">
@@ -671,7 +991,7 @@ function AnimeBhaiApp() {
                       </h3>
                     </div>
                     {filteredVideos.length > 0 ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 3xl:grid-cols-7 4xl:grid-cols-8 5xl:grid-cols-10 gap-6">
                         {filteredVideos.map(video => (
                           <AnimeCard 
                             key={video.id} 
@@ -692,7 +1012,6 @@ function AnimeBhaiApp() {
                   </div>
                 )}
               </>
-            )}
 
           </div>
         )}
@@ -701,7 +1020,7 @@ function AnimeBhaiApp() {
 
       {/* Footer Branding credits */}
       <footer className="border-t border-white/5 py-8 mt-20 bg-black/60">
-        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center gap-4 text-xs font-bold text-gray-500">
+        <div className="max-w-7xl 2xl:max-w-[1440px] 3xl:max-w-[1800px] 4xl:max-w-[2200px] 5xl:max-w-[2560px] mx-auto px-6 w-full flex flex-col md:flex-row justify-between items-center gap-4 text-xs font-bold text-gray-500">
           <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
             <div className="flex items-center gap-2">
               <span className="text-gray-400">ANIME<span className="text-cyan-400">BHAI</span></span>

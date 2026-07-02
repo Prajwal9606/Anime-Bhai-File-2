@@ -34,7 +34,7 @@ export default function JustCompletedSection({
   }, [movies, localCompleted]);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 md:px-8 py-6 transition-all duration-500 ease-in-out border border-cyan-500/20 bg-cyan-950/5 backdrop-blur-md shadow-[0_0_30px_rgba(6,182,212,0.1)] rounded-3xl mt-4 hover:border-cyan-500/45 hover:shadow-[0_0_40px_rgba(6,182,212,0.22)]">
+    <div className="max-w-7xl 2xl:max-w-[1440px] 3xl:max-w-[1800px] 4xl:max-w-[2200px] 5xl:max-w-[2560px] mx-auto w-full px-4 md:px-8 py-6 transition-all duration-500 ease-in-out border border-cyan-500/20 bg-cyan-950/5 backdrop-blur-md shadow-[0_0_30px_rgba(6,182,212,0.1)] rounded-3xl mt-4 hover:border-cyan-500/45 hover:shadow-[0_0_40px_rgba(6,182,212,0.22)]">
       {/* Header */}
       <div className="flex items-center justify-between mb-5 border-b border-white/5 pb-3">
         <div className="flex items-center gap-2.5">
@@ -66,7 +66,7 @@ export default function JustCompletedSection({
       ) : (
         <>
           {/* Portrait Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 3xl:grid-cols-8 4xl:grid-cols-10 5xl:grid-cols-12 gap-4">
             {displayedAnime.slice(0, visibleCount).map((movie) => (
               <div
                 key={movie.id}

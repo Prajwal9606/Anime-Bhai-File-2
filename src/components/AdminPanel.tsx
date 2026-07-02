@@ -27,16 +27,21 @@ import {
   TrendingUp,
   UserCheck,
   ShieldAlert,
+  Shield,
   Search,
   Edit2
 } from 'lucide-react';
 import EpisodesManager from './EpisodesManager';
 import { motion, AnimatePresence } from 'motion/react';
+import { SUPABASE_SCHEMA_SQL } from '../utils/supabaseSchema';
 
 type AdminTab = 'dashboard' | 'movies' | 'anime';
 
 interface AdminPanelProps {
   videos: Video[];
+  onSyncPosters?: () => Promise<void>;
+  isSyncingPosters?: boolean;
+  syncProgressMessage?: string;
 }
 
 function cleanFirestoreData(obj: any): any {
@@ -59,7 +64,35 @@ function cleanFirestoreData(obj: any): any {
   return obj;
 }
 
-export default function AdminPanel({ videos }: AdminPanelProps) {
+function normalizeGenres(genresInput: any): string[] {
+  if (!genresInput) return ['Anime'];
+  if (Array.isArray(genresInput)) {
+    return genresInput
+      .map((item: any) => {
+        if (!item) return '';
+        if (typeof item === 'string') return item.trim();
+        if (typeof item === 'object') {
+          return (item.name || item.title || JSON.stringify(item)).trim();
+        }
+        return String(item).trim();
+      })
+      .filter(Boolean);
+  }
+  if (typeof genresInput === 'string') {
+    return genresInput
+      .split(',')
+      .map((g: string) => g.trim())
+      .filter(Boolean);
+  }
+  return ['Anime'];
+}
+
+export default function AdminPanel({ 
+  videos, 
+  onSyncPosters, 
+  isSyncingPosters, 
+  syncProgressMessage 
+}: AdminPanelProps) {
   const { user, isDemoMode } = useAuth();
   
   // Navigation State
@@ -83,12 +116,19 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
   const [supabaseEpisodes, setSupabaseEpisodes] = useState<any[]>([]);
   const [supabaseUsers, setSupabaseUsers] = useState<any[]>([]);
   const [loadingDb, setLoadingDb] = useState(false);
+  const [isSchemaMissing, setIsSchemaMissing] = useState(false);
 
   // Fetch lists from Supabase if connected
   const fetchSupabaseData = async () => {
     if (isDemoMode || !supabase) return;
     setLoadingDb(true);
     try {
+      const checkErrorForSchemaMissing = (err: any) => {
+        if (!err) return false;
+        const msg = err.message || '';
+        return err.code === '42P01' || msg.includes('schema cache') || msg.includes('relation') || msg.includes('Could not find');
+      };
+
       // Fetch movies
       const { data: movies, error: moviesErr } = await supabase
         .from('movies')
@@ -123,6 +163,12 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
         setSupabaseUsers(sorted);
       }
 
+      if (checkErrorForSchemaMissing(moviesErr) || checkErrorForSchemaMissing(animesErr) || checkErrorForSchemaMissing(episodesErr) || checkErrorForSchemaMissing(profilesErr)) {
+        setIsSchemaMissing(true);
+      } else {
+        setIsSchemaMissing(false);
+      }
+
     } catch (e) {
       console.error('Error fetching Supabase data:', e);
     } finally {
@@ -141,6 +187,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
   const [movieGenres, setMovieGenres] = useState('');
   const [moviePosterUrl, setMoviePosterUrl] = useState('');
   const [movieVideoUrl, setMovieVideoUrl] = useState('');
+  const [movieEmbedHtml, setMovieEmbedHtml] = useState('');
   const [movieDuration, setMovieDuration] = useState('2h 5m');
 
   // ANIME & EPISODES FORM STATE
@@ -163,6 +210,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
   const [editYear, setEditYear] = useState('');
   const [editGenres, setEditGenres] = useState('');
   const [editVideoUrl, setEditVideoUrl] = useState('');
+  const [editEmbedHtml, setEditEmbedHtml] = useState('');
   const [editDuration, setEditDuration] = useState('');
   const [editStudio, setEditStudio] = useState('');
   const [editRating, setEditRating] = useState('');
@@ -355,7 +403,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
           generatedList.push({
             episode_number: i,
             title: `Episode ${i}: Dawn of Destiny`,
-            video_url: `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4`,
+            video_url: '',
             duration: '24m'
           });
         }
@@ -424,7 +472,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
     audioSources?: { lang: 'Hindi' | 'Japanese' | 'English'; url: string }[];
     embedHtml?: string;
   }>>([
-    { episode_number: 1, title: 'Episode 1: Dawn of the Journey', video_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', duration: '24m' }
+    { episode_number: 1, title: 'Episode 1: Dawn of the Journey', video_url: '', duration: '24m' }
   ]);
 
   // For configuring existing episodes
@@ -444,8 +492,10 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
         id: ep.id || `ep-${idx + 1}-${Date.now()}`,
         number: idx + 1,
         title: ep.title || `Episode ${idx + 1}: Story continues`,
-        videoUrl: ep.videoUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-        duration: ep.duration || '24m'
+        videoUrl: ep.videoUrl || ep.embedHtml || '',
+        duration: ep.duration || '24m',
+        audioSources: ep.audioSources,
+        embedHtml: ep.embedHtml
       }));
 
       // Update Firestore document
@@ -460,26 +510,108 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
 
       // Update Supabase relation if present and not in demo mode
       if (!isDemoMode && supabase) {
-        // Clean out existing episode nodes
-        await supabase
-          .from('episodes')
-          .delete()
-          .eq('anime_id', selectedConfigAnime.id);
+        let supabaseAnimeId: string | null = null;
 
-        // Upload new mapped elements
-        const episodesToInsert = validatedEpisodes.map(ep => ({
-          anime_id: selectedConfigAnime.id,
-          episode_number: ep.number,
-          title: ep.title,
-          video_url: ep.videoUrl,
-          duration: ep.duration
-        }));
+        // Try to find the anime by title first
+        const { data: animeMatch, error: matchErr } = await supabase
+          .from('animes')
+          .select('id')
+          .eq('title', selectedConfigAnime.title)
+          .limit(1);
 
-        if (episodesToInsert.length > 0) {
-          const { error } = await supabase
+        if (!matchErr && animeMatch && animeMatch.length > 0) {
+          supabaseAnimeId = animeMatch[0].id;
+        } else {
+          // Check if selectedConfigAnime.id is a valid UUID
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(selectedConfigAnime.id);
+          let existsInSupabase = false;
+          if (isUuid) {
+            const { data: idMatch, error: idMatchErr } = await supabase
+              .from('animes')
+              .select('id')
+              .eq('id', selectedConfigAnime.id)
+              .limit(1);
+            if (!idMatchErr && idMatch && idMatch.length > 0) {
+              supabaseAnimeId = selectedConfigAnime.id;
+              existsInSupabase = true;
+            }
+          }
+
+          if (!existsInSupabase) {
+            // Auto-create matching anime in Supabase to maintain SQL relational integrity
+            const parsedGenres = normalizeGenres(selectedConfigAnime.genres);
+            const rawYear = selectedConfigAnime.year ? parseInt(selectedConfigAnime.year, 10) : 2026;
+            const safeYear = isNaN(rawYear) ? 2026 : rawYear;
+            const rawRating = selectedConfigAnime.rating ? parseFloat(selectedConfigAnime.rating) : 4.5;
+            const safeRating = isNaN(rawRating) ? 4.5 : rawRating;
+
+            const insertPayload: any = {
+              title: selectedConfigAnime.title,
+              synopsis: selectedConfigAnime.description || '',
+              release_year: safeYear,
+              genre: parsedGenres,
+              poster_url: selectedConfigAnime.thumbnail,
+              rating: safeRating
+            };
+
+            if (isUuid) {
+              insertPayload.id = selectedConfigAnime.id;
+            }
+
+            const { data: newAnime, error: createErr } = await supabase
+              .from('animes')
+              .insert([insertPayload])
+              .select();
+            
+            if (!createErr && newAnime && newAnime[0]) {
+              supabaseAnimeId = newAnime[0].id;
+            } else {
+              console.error('Failed to create matching anime entry in Supabase:', createErr);
+              let errorMsg = createErr?.message || 'Access Denied / Row-Level Security policy restriction';
+              if (createErr?.code === '42501') {
+                errorMsg = 'Row-Level Security (RLS) violation: You are not authorized to write to "animes". Please ensure your Supabase user profile is registered with role = "admin" in public.profiles, or copy & paste the complete RLS policies from supabase_schema.sql into your Supabase SQL Editor.';
+              } else if (createErr?.code === '42P01') {
+                errorMsg = 'Relation "animes" does not exist: Please copy & paste the schema setup from supabase_schema.sql into your Supabase SQL Editor first to create the necessary tables!';
+              }
+              showToast('error', `Supabase sync error: ${errorMsg}`);
+              throw new Error(errorMsg);
+            }
+          }
+        }
+
+        if (supabaseAnimeId) {
+          // Clean out existing episode nodes with verified UUID
+          await supabase
             .from('episodes')
-            .insert(episodesToInsert);
-          if (error) console.error('Supabase parallel insert error:', error);
+            .delete()
+            .eq('anime_id', supabaseAnimeId);
+
+          // Upload new mapped elements
+          const episodesToInsert = validatedEpisodes.map(ep => ({
+            anime_id: supabaseAnimeId,
+            episode_number: ep.number,
+            title: ep.title,
+            video_url: ep.videoUrl || ep.embedHtml || '',
+            duration: ep.duration
+          }));
+
+          if (episodesToInsert.length > 0) {
+            const { error } = await supabase
+              .from('episodes')
+              .insert(episodesToInsert);
+            if (error) {
+              console.error('Supabase parallel insert error:', error);
+              let errorMsg = error.message || 'Failed to insert episodes into Supabase';
+              if (error.code === '42501') {
+                errorMsg = 'Row-Level Security (RLS) violation: You are not authorized to write to "episodes". Please ensure your Supabase user profile has role = "admin" in public.profiles, or copy & paste the complete RLS policies from supabase_schema.sql into your Supabase SQL Editor.';
+              } else if (error.code === '42P01' || errorMsg.includes('schema cache') || errorMsg.includes('Could not find the table')) {
+                errorMsg = 'Table "episodes" does not exist in Supabase: Please copy & paste the schema setup from supabase_schema.sql into your Supabase SQL Editor first to initialize the tables!';
+              }
+              throw new Error(errorMsg);
+            }
+          }
+        } else {
+          console.warn('Skipping Supabase episodes insert because no matching anime could be resolved.');
         }
       }
 
@@ -496,21 +628,21 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
   // Handle Adding Movie
   const handleAddMovie = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!movieTitle || !moviePosterUrl || !movieVideoUrl) {
-      showToast('error', 'Please fill in all required fields (Title, Poster Image URL, Video Stream URL).');
+    if (!movieTitle || !moviePosterUrl || (!movieVideoUrl && !movieEmbedHtml)) {
+      showToast('error', 'Please fill in all required fields (Title, Poster Image URL, and Video Stream URL or Embed HTML).');
       return;
     }
 
     showToast('loading', 'Uploading movie entry to database...');
 
-    const parsedGenres = movieGenres ? movieGenres.split(',').map(g => g.trim()) : ['Movie', 'Action'];
+    const parsedGenres = normalizeGenres(movieGenres || ['Movie', 'Action']);
     const movieData = {
       title: movieTitle,
       synopsis: movieSynopsis,
       release_year: parseInt(movieReleaseYear) || 2026,
       genre: parsedGenres,
       poster_url: moviePosterUrl,
-      video_url: movieVideoUrl,
+      video_url: movieVideoUrl || movieEmbedHtml,
       duration: movieDuration,
       rating: 4.5
     };
@@ -539,6 +671,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
           thumbnail: moviePosterUrl,
           backdrop: moviePosterUrl,
           videoUrl: movieVideoUrl,
+          embedHtml: movieEmbedHtml,
           category: 'movie',
           year: movieReleaseYear,
           genres: parsedGenres,
@@ -561,6 +694,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
       setMovieGenres('');
       setMoviePosterUrl('');
       setMovieVideoUrl('');
+      setMovieEmbedHtml('');
       setMovieDuration('2h 5m');
       fetchSupabaseData();
 
@@ -580,7 +714,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
 
     showToast('loading', 'Registering Anime series...');
 
-    const parsedGenres = animeGenres ? animeGenres.split(',').map(g => g.trim()) : ['Anime', 'Action', 'Shonen'];
+    const parsedGenres = normalizeGenres(animeGenres || ['Anime', 'Action', 'Shonen']);
     const animeData = {
       title: animeTitle,
       synopsis: animeSynopsis,
@@ -637,22 +771,96 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
     try {
       if (!isDemoMode && supabase) {
         try {
-          // Insert episodes into Supabase linked by foreign key
-          const episodesToInsert = episodesList.map(ep => ({
-            anime_id: createdAnimeId,
-            episode_number: ep.episode_number,
-            title: ep.title,
-            video_url: ep.video_url,
-            duration: ep.duration
-          }));
+          let supabaseAnimeId = createdAnimeId;
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(createdAnimeId || '');
+          let existsInSupabase = false;
 
-          const { error } = await supabase
-            .from('episodes')
-            .insert(episodesToInsert);
+          if (isUuid && createdAnimeId) {
+            const { data: idMatch, error: idMatchErr } = await supabase
+              .from('animes')
+              .select('id')
+              .eq('id', createdAnimeId)
+              .limit(1);
+            if (!idMatchErr && idMatch && idMatch.length > 0) {
+              supabaseAnimeId = createdAnimeId;
+              existsInSupabase = true;
+            }
+          }
 
-          if (error) throw error;
+          if (!existsInSupabase) {
+            // Find by title in Supabase
+            const { data: animeMatch, error: matchErr } = await supabase
+              .from('animes')
+              .select('id')
+              .eq('title', animeTitle)
+              .limit(1);
+
+            if (!matchErr && animeMatch && animeMatch.length > 0) {
+              supabaseAnimeId = animeMatch[0].id;
+            } else {
+              // Create the anime in Supabase first to get a valid UUID
+              const parsedGenres = normalizeGenres(animeGenres || ['Anime', 'Action', 'Shonen']);
+              const insertPayload: any = {
+                title: animeTitle,
+                synopsis: animeSynopsis,
+                release_year: parseInt(animeReleaseYear) || 2026,
+                genre: parsedGenres,
+                poster_url: animePosterUrl,
+                rating: parseFloat(animeRating) || 4.5
+              };
+
+              if (isUuid && createdAnimeId) {
+                insertPayload.id = createdAnimeId;
+              }
+
+              const { data: newAnime, error: createErr } = await supabase
+                .from('animes')
+                .insert([insertPayload])
+                .select();
+              
+              if (!createErr && newAnime && newAnime[0]) {
+                supabaseAnimeId = newAnime[0].id;
+              } else {
+                console.error('Failed to create matching anime entry in Supabase:', createErr);
+                let errorMsg = createErr?.message || 'Access Denied / Row-Level Security policy restriction';
+                if (createErr?.code === '42501') {
+                  errorMsg = 'Row-Level Security (RLS) violation: You are not authorized to write to "animes". Please ensure your Supabase user profile is registered with role = "admin" in public.profiles, or copy & paste the complete RLS policies from supabase_schema.sql into your Supabase SQL Editor.';
+                } else if (createErr?.code === '42P01') {
+                  errorMsg = 'Relation "animes" does not exist: Please copy & paste the schema setup from supabase_schema.sql into your Supabase SQL Editor first to create the necessary tables!';
+                }
+                showToast('error', `Supabase sync error: ${errorMsg}`);
+                throw new Error(errorMsg);
+              }
+            }
+          }
+
+          if (supabaseAnimeId) {
+            // Insert episodes into Supabase linked by foreign key
+            const episodesToInsert = episodesList.map(ep => ({
+              anime_id: supabaseAnimeId,
+              episode_number: ep.episode_number,
+              title: ep.title,
+              video_url: ep.video_url || ep.embedHtml || '',
+              duration: ep.duration
+            }));
+
+            const { error } = await supabase
+              .from('episodes')
+              .insert(episodesToInsert);
+
+            if (error) throw error;
+          } else {
+            console.warn('Could not resolve a valid Supabase anime UUID for inserting episodes');
+          }
         } catch (supabaseErr: any) {
           console.warn('Supabase episodes insert failed, falling back to local/Firestore indexing:', supabaseErr);
+          let errorMsg = supabaseErr?.message || 'Database error';
+          if (supabaseErr?.code === '42501') {
+            errorMsg = 'Row-Level Security (RLS) violation: You are not authorized to write to "episodes". Please ensure your Supabase user profile has role = "admin" in public.profiles, or copy & paste the complete RLS policies from supabase_schema.sql into your Supabase SQL Editor.';
+          } else if (supabaseErr?.code === '42P01' || errorMsg.includes('schema cache') || errorMsg.includes('Could not find the table')) {
+            errorMsg = 'Table "episodes" does not exist in Supabase: Please copy & paste the schema setup from supabase_schema.sql into your Supabase SQL Editor first to initialize the tables!';
+          }
+          showToast('error', `Supabase sync incomplete: ${errorMsg}`);
         }
       }
 
@@ -662,7 +870,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
         id: `ep-${idx}-${Date.now()}`,
         number: ep.episode_number,
         title: ep.title,
-        videoUrl: ep.video_url,
+        videoUrl: ep.video_url || ep.embedHtml || '',
         duration: ep.duration,
         audioSources: ep.audioSources,
         embedHtml: ep.embedHtml
@@ -674,7 +882,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
           description: animeSynopsis,
           thumbnail: animePosterUrl,
           backdrop: animePosterUrl,
-          videoUrl: episodesList[0]?.video_url || '',
+          videoUrl: episodesList[0]?.video_url || episodesList[0]?.embedHtml || '',
           category: 'anime',
           year: animeReleaseYear,
           genres: parsedGenres,
@@ -704,7 +912,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
       setAnimeContentRating('');
       setCreatedAnimeId(null);
       setCreatedAnimeTitle('');
-      setEpisodesList([{ episode_number: 1, title: 'Episode 1: Dawn of the Journey', video_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', duration: '24m' }]);
+      setEpisodesList([{ episode_number: 1, title: 'Episode 1: Dawn of the Journey', video_url: '', duration: '24m' }]);
       setAnimeStep(1);
       fetchSupabaseData();
 
@@ -722,7 +930,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
       { 
         episode_number: nextNumber, 
         title: `Episode ${nextNumber}: New Awakening`, 
-        video_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4', 
+        video_url: '', 
         duration: '24m' 
       }
     ]);
@@ -838,6 +1046,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
     setEditYear(video.year || video.release_year || '2026');
     setEditGenres(Array.isArray(video.genres) ? video.genres.join(', ') : (video.genres || video.genre || ''));
     setEditVideoUrl(video.videoUrl || video.video_url || '');
+    setEditEmbedHtml(video.embedHtml || '');
     setEditDuration(video.duration || '');
     setEditStudio(video.studio || '');
     setEditRating(video.rating || '4.5');
@@ -865,6 +1074,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
       thumbnail: editThumbnail,
       backdrop: editThumbnail,
       videoUrl: editVideoUrl,
+      embedHtml: editEmbedHtml,
       year: editYear,
       genres: parsedGenres,
       duration: editDuration,
@@ -898,7 +1108,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
         };
 
         if (editingVideo.category === 'movie') {
-          supabaseData.video_url = editVideoUrl;
+          supabaseData.video_url = editVideoUrl || editEmbedHtml;
           supabaseData.duration = editDuration;
         }
 
@@ -950,19 +1160,25 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
       </AnimatePresence>
 
       {/* SIDEBAR NAVIGATION LAYOUT */}
-      <div className="bg-[#111111]/90 border border-white/5 rounded-3xl p-6 flex flex-col gap-6 h-fit">
-        <div>
-          <span className="text-[10px] font-black text-cyan-400 uppercase tracking-widest block mb-1">ADMINISTRATOR</span>
-          <h2 className="text-lg font-black text-white tracking-tight uppercase leading-none">Console</h2>
+      <div className="bg-[#0a0a0d]/85 backdrop-blur-xl border border-white/5 rounded-3xl p-4 sm:p-6 flex flex-col gap-4 sm:gap-6 h-fit shadow-xl shadow-black/40">
+        <div className="flex flex-row lg:flex-col justify-between lg:justify-start items-center lg:items-start gap-2">
+          <div>
+            <span className="text-[10px] font-black text-cyan-400 uppercase tracking-widest block mb-1">ADMINISTRATOR</span>
+            <h2 className="text-lg font-black text-white tracking-tight uppercase leading-none">Console</h2>
+          </div>
+          <div className="lg:hidden flex items-center gap-1.5 font-bold uppercase tracking-widest text-[9px] text-cyan-400 bg-white/5 px-2.5 py-1 rounded-xl border border-white/5">
+            <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+            Live DB
+          </div>
         </div>
 
-        <nav className="flex flex-col gap-2">
+        <nav className="flex flex-row overflow-x-auto lg:flex-col gap-2 pb-1 lg:pb-0 scrollbar-none scroll-smooth">
           <button 
             onClick={() => setCurrentTab('dashboard')}
-            className={`flex items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition ${
+            className={`flex items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition duration-300 shrink-0 ${
               currentTab === 'dashboard' 
-                ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/10' 
-                : 'text-gray-400 hover:text-white hover:bg-white/5'
+                ? 'bg-gradient-to-r from-cyan-500 to-cyan-400 text-black shadow-lg shadow-cyan-500/20 hover:scale-[1.02]' 
+                : 'text-gray-400 hover:text-white hover:bg-white/5 hover:scale-[1.01]'
             }`}
           >
             <LayoutDashboard size={14} />
@@ -971,10 +1187,10 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
           
           <button 
             onClick={() => setCurrentTab('movies')}
-            className={`flex items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition ${
+            className={`flex items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition duration-300 shrink-0 ${
               currentTab === 'movies' 
-                ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/10' 
-                : 'text-gray-400 hover:text-white hover:bg-white/5'
+                ? 'bg-gradient-to-r from-cyan-500 to-cyan-400 text-black shadow-lg shadow-cyan-500/20 hover:scale-[1.02]' 
+                : 'text-gray-400 hover:text-white hover:bg-white/5 hover:scale-[1.01]'
             }`}
           >
             <Film size={14} />
@@ -983,10 +1199,10 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
 
           <button 
             onClick={() => setCurrentTab('anime')}
-            className={`flex items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition ${
+            className={`flex items-center gap-2.5 px-4 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition duration-300 shrink-0 ${
               currentTab === 'anime' 
-                ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/10' 
-                : 'text-gray-400 hover:text-white hover:bg-white/5'
+                ? 'bg-gradient-to-r from-cyan-500 to-cyan-400 text-black shadow-lg shadow-cyan-500/20 hover:scale-[1.02]' 
+                : 'text-gray-400 hover:text-white hover:bg-white/5 hover:scale-[1.01]'
             }`}
           >
             <Tv size={14} />
@@ -994,8 +1210,8 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
           </button>
         </nav>
 
-        <div className="mt-8 pt-6 border-t border-white/5 text-[10px] text-gray-500 space-y-2">
-          <div className="flex items-center gap-1.5 font-bold uppercase tracking-widest text-[9px] text-gray-400">
+        <div className="hidden lg:block mt-2 pt-6 border-t border-white/5 text-[10px] text-gray-400 space-y-2">
+          <div className="flex items-center gap-1.5 font-bold uppercase tracking-widest text-[9px] text-cyan-400">
             <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
             Supabase DB Online
           </div>
@@ -1033,7 +1249,8 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
           }).slice(0, 5);
 
           const mockRecentUsers = [
-            { email: 'prajwalgadade9606@gmail.com', displayName: 'Prajwal Gadade', role: 'admin', created_at: '2026-06-29T08:12:00Z' },
+            { email: 'prajwalgadade20@gmail.com', displayName: 'Prajwal Gadade', role: 'admin', created_at: '2026-06-30T09:00:00Z' },
+            { email: 'prajwalgadade9606@gmail.com', displayName: 'Prajwal Admin', role: 'admin', created_at: '2026-06-29T08:12:00Z' },
             { email: 'tanjiro_demon_slayer@gmail.com', displayName: 'Tanjiro Kamado', role: 'user', created_at: '2026-06-28T14:45:00Z' },
             { email: 'goku_saiyan@gmail.com', displayName: 'Son Goku', role: 'user', created_at: '2026-06-28T09:30:00Z' },
             { email: 'anime_fanatic@gmail.com', displayName: 'Satoru Gojo', role: 'user', created_at: '2026-06-27T19:15:00Z' },
@@ -1062,60 +1279,189 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
                 </div>
               </div>
 
+              {isSchemaMissing && (
+                <div className="bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-red-500/10 border border-orange-500/30 rounded-3xl p-6 space-y-4 shadow-xl shadow-black/40 relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/5 rounded-full blur-2xl -mr-10 -mt-10 group-hover:scale-110 transition-transform duration-500" />
+                  <div className="flex items-start gap-4">
+                    <div className="p-3 bg-orange-500/15 border border-orange-500/35 rounded-2xl text-orange-400 shrink-0">
+                      <AlertCircle size={24} className="animate-bounce" />
+                    </div>
+                    <div className="space-y-1.5 flex-1">
+                      <span className="text-[10px] font-black text-orange-400 uppercase tracking-widest block">Attention Required</span>
+                      <h4 className="text-md font-black text-white uppercase tracking-tight">Database Schema Tables Missing</h4>
+                      <p className="text-xs text-gray-300 leading-relaxed max-w-3xl">
+                        We detected that some required tables (such as <code className="text-orange-300 font-mono">animes</code> or <code className="text-orange-300 font-mono">episodes</code>) do not exist in your Supabase database schema, or are missing from the schema cache. Please copy and paste the SQL schema setup script directly into your **Supabase SQL Editor** and click **Run** to generate the tables and setup Row-Level Security (RLS) policies.
+                      </p>
+                      <div className="pt-2 flex flex-wrap gap-3">
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(SUPABASE_SCHEMA_SQL);
+                            showToast('success', 'SQL Schema code copied! Paste it directly into your Supabase SQL Editor and click Run.');
+                          }}
+                          className="bg-orange-500 hover:bg-orange-400 text-black text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition cursor-pointer flex items-center gap-1.5 animate-pulse"
+                        >
+                          <FileText size={12} /> Copy SQL Schema Code
+                        </button>
+                        <a
+                          href="https://supabase.com/dashboard"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="bg-white/5 hover:bg-white/10 border border-white/10 text-white text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition flex items-center gap-1.5"
+                        >
+                          Open Supabase Dashboard <ArrowRight size={12} />
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {!isDemoMode && (
+                <div className="bg-gradient-to-r from-blue-500/10 via-indigo-500/10 to-purple-500/10 border border-indigo-500/20 rounded-3xl p-6 space-y-4 shadow-xl shadow-black/40 relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-2xl -mr-10 -mt-10 group-hover:scale-110 transition-transform duration-500" />
+                  <div className="flex items-start gap-4">
+                    <div className="p-3 bg-indigo-500/15 border border-indigo-500/35 rounded-2xl text-indigo-400 shrink-0">
+                      <Shield size={24} className="animate-pulse" />
+                    </div>
+                    <div className="space-y-1.5 flex-1">
+                      <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest block">Security & RLS Doctor</span>
+                      <h4 className="text-md font-black text-white uppercase tracking-tight">Supabase RLS & Admin Role Diagnosis</h4>
+                      <p className="text-xs text-gray-300 leading-relaxed max-w-3xl">
+                        To resolve <code className="text-pink-300 font-mono">Row-Level Security (RLS) violation / You are not authorized</code> errors, please make sure you executed our improved, recursion-free SQL Schema setup in your **Supabase SQL Editor**. 
+                        The schema uses a custom Security Definer function <code className="text-indigo-300 font-mono">public.is_admin()</code> to bypass recursion and correctly check admin status.
+                      </p>
+                      <div className="pt-2 flex flex-wrap gap-3">
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(SUPABASE_SCHEMA_SQL);
+                            showToast('success', 'SQL Schema code copied! Paste it directly into your Supabase SQL Editor and click Run.');
+                          }}
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                        >
+                          <FileText size={12} /> Copy Recursion-Free SQL Schema
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!supabase || !user) return;
+                            showToast('loading', 'Healing admin role in Supabase...');
+                            try {
+                              const { error } = await supabase
+                                .from('profiles')
+                                .upsert({ id: user.id, email: user.email, role: 'admin' });
+                              if (error) throw error;
+                              showToast('success', 'Successfully updated admin profile row in your database!');
+                              fetchSupabaseData();
+                            } catch (e: any) {
+                              showToast('error', `Could not update profile table: ${e.message}. (Make sure you pasted the SQL Schema first!)`);
+                            }
+                          }}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                        >
+                          <UserCheck size={12} /> Self-Heal Admin Role Row
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* AUTOMATIC POSTER SYNC OPERATIONS ENGINE */}
+              <div className="bg-gradient-to-r from-cyan-500/10 via-teal-500/10 to-emerald-500/10 border border-cyan-500/20 rounded-3xl p-6 space-y-4 shadow-xl shadow-black/40 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-2xl -mr-10 -mt-10 group-hover:scale-110 transition-transform duration-500" />
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 relative z-10">
+                  <div className="flex items-start gap-4">
+                    <div className="p-3.5 bg-cyan-500/15 border border-cyan-500/35 rounded-2xl text-cyan-400 shrink-0">
+                      <Sparkles size={24} className={isSyncingPosters ? "animate-spin" : "animate-pulse"} />
+                    </div>
+                    <div className="space-y-1.5 flex-1">
+                      <span className="text-[10px] font-black text-cyan-400 uppercase tracking-widest block">Metadata Automatons</span>
+                      <h4 className="text-md font-black text-white uppercase tracking-tight">Bulk Poster Sync & Enrichment Engine</h4>
+                      <p className="text-xs text-gray-300 leading-relaxed max-w-2xl">
+                        Resolves any placeholder or missing covers for your entire library using high-quality official posters fetched directly from the MyAnimeList / Jikan APIs. Updates both temporary cache and persistent databases.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="shrink-0 flex flex-col items-stretch sm:items-end gap-2.5 min-w-[180px]">
+                    <button
+                      onClick={onSyncPosters}
+                      disabled={isSyncingPosters}
+                      className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:bg-cyan-950/50 disabled:text-cyan-600 disabled:border-cyan-900/30 border border-cyan-400/20 text-black text-[11px] font-black uppercase tracking-widest px-5 py-3 rounded-xl transition duration-150 flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/15 hover:shadow-cyan-400/25 active:scale-95 disabled:pointer-events-none"
+                    >
+                      {isSyncingPosters ? (
+                        <>
+                          <Loader2 size={13} className="animate-spin" />
+                          <span>Syncing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={13} />
+                          <span>Sync Posters</span>
+                        </>
+                      )}
+                    </button>
+                    {isSyncingPosters && (
+                      <span className="text-[9px] text-cyan-400 font-extrabold uppercase tracking-widest text-center sm:text-right animate-pulse bg-cyan-950/40 px-2.5 py-1 rounded-md border border-cyan-500/10 block truncate">
+                        {syncProgressMessage || 'Connecting to API...'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               {/* KPI STATS CARDS */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {/* Total Movies */}
-                <div className="bg-[#111111]/80 border border-white/5 rounded-2xl p-5 relative overflow-hidden flex items-center justify-between">
-                  <div>
+                <div className="bg-[#0a0a0d]/85 backdrop-blur-md border border-white/5 hover:border-pink-500/25 rounded-2xl p-5 relative overflow-hidden flex items-center justify-between transition-all duration-300 shadow-lg shadow-black/40 group">
+                  <div className="z-10">
                     <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Total Movies</span>
-                    <span className="text-3xl font-black text-white">{totalMoviesCount}</span>
+                    <span className="text-3xl font-black text-white group-hover:text-pink-400 transition-colors duration-300">{totalMoviesCount}</span>
                     <div className="mt-2 text-[9px] text-pink-400 font-extrabold uppercase tracking-wider flex items-center gap-1">
                       <TrendingUp size={9} /> {isDemoMode ? 'Standard catalog' : 'SQL relations'}
                     </div>
                   </div>
-                  <div className="p-3.5 bg-pink-500/10 border border-pink-500/20 text-pink-400 rounded-xl">
+                  <div className="p-3.5 bg-pink-500/10 border border-pink-500/20 text-pink-400 rounded-xl group-hover:scale-105 transition-transform duration-300">
                     <Film size={20} />
                   </div>
                 </div>
 
                 {/* Total Anime Series */}
-                <div className="bg-[#111111]/80 border border-white/5 rounded-2xl p-5 relative overflow-hidden flex items-center justify-between">
-                  <div>
+                <div className="bg-[#0a0a0d]/85 backdrop-blur-md border border-white/5 hover:border-purple-500/25 rounded-2xl p-5 relative overflow-hidden flex items-center justify-between transition-all duration-300 shadow-lg shadow-black/40 group">
+                  <div className="z-10">
                     <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Anime Series</span>
-                    <span className="text-3xl font-black text-white">{totalAnimesCount}</span>
+                    <span className="text-3xl font-black text-white group-hover:text-purple-400 transition-colors duration-300">{totalAnimesCount}</span>
                     <div className="mt-2 text-[9px] text-purple-400 font-extrabold uppercase tracking-wider flex items-center gap-1">
                       <TrendingUp size={9} /> Multi-episode sets
                     </div>
                   </div>
-                  <div className="p-3.5 bg-purple-500/10 border border-purple-500/20 text-purple-400 rounded-xl">
+                  <div className="p-3.5 bg-purple-500/10 border border-purple-500/20 text-purple-400 rounded-xl group-hover:scale-105 transition-transform duration-300">
                     <Tv size={20} />
                   </div>
                 </div>
 
                 {/* Total Episodes */}
-                <div className="bg-[#111111]/80 border border-white/5 rounded-2xl p-5 relative overflow-hidden flex items-center justify-between">
-                  <div>
+                <div className="bg-[#0a0a0d]/85 backdrop-blur-md border border-white/5 hover:border-cyan-500/25 rounded-2xl p-5 relative overflow-hidden flex items-center justify-between transition-all duration-300 shadow-lg shadow-black/40 group">
+                  <div className="z-10">
                     <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Total Episodes</span>
-                    <span className="text-3xl font-black text-white">{totalEpisodesCount}</span>
+                    <span className="text-3xl font-black text-white group-hover:text-cyan-400 transition-colors duration-300">{totalEpisodesCount}</span>
                     <div className="mt-2 text-[9px] text-cyan-400 font-extrabold uppercase tracking-wider flex items-center gap-1">
                       <TrendingUp size={9} /> Verified streams
                     </div>
                   </div>
-                  <div className="p-3.5 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-xl">
+                  <div className="p-3.5 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-xl group-hover:scale-105 transition-transform duration-300">
                     <PlayCircle size={20} />
                   </div>
                 </div>
 
                 {/* Total Registered Users */}
-                <div className="bg-[#111111]/80 border border-white/5 rounded-2xl p-5 relative overflow-hidden flex items-center justify-between">
-                  <div>
+                <div className="bg-[#0a0a0d]/85 backdrop-blur-md border border-white/5 hover:border-amber-500/25 rounded-2xl p-5 relative overflow-hidden flex items-center justify-between transition-all duration-300 shadow-lg shadow-black/40 group">
+                  <div className="z-10">
                     <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Total Users</span>
-                    <span className="text-3xl font-black text-white">{totalUsersCount}</span>
+                    <span className="text-3xl font-black text-white group-hover:text-amber-400 transition-colors duration-300">{totalUsersCount}</span>
                     <div className="mt-2 text-[9px] text-amber-400 font-extrabold uppercase tracking-wider flex items-center gap-1">
                       <UserCheck size={9} /> Active sessions
                     </div>
                   </div>
-                  <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-xl">
+                  <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-xl group-hover:scale-105 transition-transform duration-300">
                     <Users size={20} />
                   </div>
                 </div>
@@ -1183,7 +1529,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
               {/* RECENT ACTIVITY TABLES */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                 {/* Recently Added Content Table */}
-                <div className="lg:col-span-8 bg-[#111111]/90 border border-white/5 rounded-3xl p-6 space-y-4">
+                <div className="lg:col-span-8 bg-[#0a0a0d]/95 backdrop-blur-md border border-white/5 rounded-3xl p-6 space-y-4 shadow-xl shadow-black/40">
                   <div className="flex justify-between items-center pb-2 border-b border-white/5">
                     <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
                       <Clock size={12} className="text-cyan-400" />
@@ -1244,7 +1590,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
                 </div>
 
                 {/* Latest Users list */}
-                <div id="registered-users-table" className="lg:col-span-4 bg-[#111111]/90 border border-white/5 rounded-3xl p-6 space-y-4">
+                <div id="registered-users-table" className="lg:col-span-4 bg-[#0a0a0d]/95 backdrop-blur-md border border-white/5 rounded-3xl p-6 space-y-4 shadow-xl shadow-black/40">
                   <div className="flex justify-between items-center pb-2 border-b border-white/5">
                     <span className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-1.5">
                       <Users size={12} className="text-amber-400" />
@@ -1285,7 +1631,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
               </div>
 
               {/* REAL-TIME CATALOG LIST */}
-              <div className="bg-[#111111]/90 border border-white/5 rounded-3xl p-6 space-y-4">
+              <div className="bg-[#0a0a0d]/95 backdrop-blur-md border border-white/5 rounded-3xl p-6 space-y-4 shadow-xl shadow-black/40">
                 <div className="flex justify-between items-center pb-2 border-b border-white/5">
                   <span className="text-xs font-black text-white uppercase tracking-wider">Active Stream Catalog</span>
                   <span className="text-[10px] text-gray-400 font-bold uppercase">Actions</span>
@@ -1374,7 +1720,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
                 <h3 className="text-xl font-black text-white uppercase tracking-tight">Active Movie Vault</h3>
               </div>
 
-              <div className="bg-[#111111]/90 border border-white/5 rounded-3xl p-6">
+              <div className="bg-[#0a0a0d]/95 backdrop-blur-md border border-white/5 rounded-3xl p-6 shadow-xl shadow-black/40">
                 {!isDemoMode && supabaseMovies.length > 0 ? (
                   <div className="space-y-4">
                     <span className="text-[10px] font-black text-cyan-400 uppercase tracking-widest block">Supabase SQL Movie Entries</span>
@@ -1446,7 +1792,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
             </div>
 
             {/* ADD MOVIE FORM */}
-            <div id="add-movie-form" className="bg-[#111111]/90 border border-cyan-500/10 rounded-3xl p-6 h-fit space-y-6">
+            <div id="add-movie-form" className="bg-[#0a0a0d]/95 backdrop-blur-md border border-cyan-500/10 rounded-3xl p-6 h-fit space-y-6 shadow-xl shadow-black/40">
               <div>
                 <span className="text-[10px] font-black text-pink-500 uppercase tracking-widest block mb-1">PUBLICATION FORM</span>
                 <h4 className="text-md font-black text-white uppercase tracking-tight">Add New Movie</h4>
@@ -1534,6 +1880,17 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
                   />
                 </div>
 
+                <div className="space-y-1">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Video Embed HTML / Iframe</label>
+                  <input 
+                    type="text"
+                    placeholder="<iframe src='...' />"
+                    value={movieEmbedHtml}
+                    onChange={e => setMovieEmbedHtml(e.target.value)}
+                    className="w-full bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold"
+                  />
+                </div>
+
                 <button 
                   type="submit"
                   className="w-full bg-cyan-500 hover:bg-cyan-400 text-black font-black text-xs uppercase tracking-widest py-3.5 rounded-xl transition transform active:scale-95 flex items-center justify-center gap-1.5 shadow-lg shadow-cyan-500/10 cursor-pointer"
@@ -1549,7 +1906,18 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
 
         {/* TAB 3: MANAGE ANIME SERIES */}
         {currentTab === 'anime' && (
-          <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
+          selectedConfigAnime ? (
+            <div className="space-y-6 animate-fade-in">
+              <EpisodesManager
+                animeTitle={selectedConfigAnime.title}
+                episodes={configEpisodesList}
+                onUpdateEpisodes={setConfigEpisodesList}
+                onSave={handleSaveEpisodesConfig}
+                onCancel={() => setSelectedConfigAnime(null)}
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-6">
             
             {/* ANIME SERIES LISTINGS */}
             <div className="space-y-6">
@@ -1558,7 +1926,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
                 <h3 className="text-xl font-black text-white uppercase tracking-tight">Active Anime Vault</h3>
               </div>
 
-              <div className="bg-[#111111]/90 border border-white/5 rounded-3xl p-6 max-h-[600px] overflow-y-auto">
+              <div className="bg-[#0a0a0d]/95 backdrop-blur-md border border-white/5 rounded-3xl p-6 max-h-[600px] overflow-y-auto shadow-xl shadow-black/40">
                 {(() => {
                   const animeVideos = videos.filter(v => v.category === 'anime');
                   if (animeVideos.length === 0) {
@@ -1679,20 +2047,10 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
             </div>
 
             {/* INTERACTIVE 2-STEP CREATOR */}
-            <div id="add-anime-form" className={selectedConfigAnime ? "" : "bg-[#111111]/90 border border-cyan-500/10 rounded-3xl p-6 h-fit space-y-6"}>
-              
-              {selectedConfigAnime ? (
-                <EpisodesManager
-                  animeTitle={selectedConfigAnime.title}
-                  episodes={configEpisodesList}
-                  onUpdateEpisodes={setConfigEpisodesList}
-                  onSave={handleSaveEpisodesConfig}
-                  onCancel={() => setSelectedConfigAnime(null)}
-                />
-              ) : (
-                <>
+            <div id="add-anime-form" className="bg-[#0a0a0d]/95 backdrop-blur-md border border-cyan-500/10 rounded-3xl p-4 sm:p-6 h-fit space-y-6 shadow-xl shadow-black/40">
+              <>
                   {/* HEADER W/ STEP BADGES */}
-                  <div className="flex justify-between items-center pb-4 mb-4 border-b border-white/10 bg-gradient-to-r from-zinc-900 via-purple-950/20 to-cyan-950/20 p-4 -mx-6 -mt-6 rounded-t-3xl border-t border-x border-white/5">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-4 mb-4 border-b border-white/10 bg-gradient-to-r from-zinc-900 via-purple-950/20 to-cyan-950/20 p-4 -mx-4 sm:-mx-6 -mt-4 sm:-mt-6 rounded-t-3xl border-t border-x border-white/5">
                     <div>
                       <span className="text-[9px] font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-cyan-400 uppercase block mb-1">SERIES PUBLISHER</span>
                       <h4 className="text-lg font-black text-white uppercase tracking-tight flex items-center gap-2">
@@ -1904,7 +2262,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div className="space-y-1">
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Score / Rating (Out of 5)</label>
                       <input 
@@ -2245,11 +2603,10 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
                 </div>
               )}
                 </>
-              )}
+              </div>
 
             </div>
-
-          </div>
+          )
         )}
 
       </div>
@@ -2262,7 +2619,7 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-[#111111] border border-white/10 rounded-3xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto space-y-6 shadow-2xl relative text-left"
+              className="bg-[#0a0a0d]/95 backdrop-blur-xl border border-white/10 rounded-3xl p-6 w-full max-w-xl max-h-[90vh] overflow-y-auto space-y-6 shadow-2xl relative text-left"
             >
               <button 
                 onClick={() => setEditingVideo(null)}
@@ -2338,24 +2695,36 @@ export default function AdminPanel({ videos }: AdminPanelProps) {
                 </div>
 
                 {editingVideo.category === 'movie' ? (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block text-left">Video Stream URL</label>
-                      <input 
-                        type="text"
-                        value={editVideoUrl}
-                        onChange={e => setEditVideoUrl(e.target.value)}
-                        className="w-full bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold"
-                      />
-                    </div>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block text-left">Video Stream URL</label>
+                        <input 
+                          type="text"
+                          value={editVideoUrl}
+                          onChange={e => setEditVideoUrl(e.target.value)}
+                          className="w-full bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold"
+                        />
+                      </div>
 
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block text-left">Duration</label>
+                        <input 
+                          type="text"
+                          value={editDuration}
+                          onChange={e => setEditDuration(e.target.value)}
+                          className="w-full bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold"
+                        />
+                      </div>
+                    </div>
                     <div className="space-y-1">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block text-left">Duration</label>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block text-left">Video Embed HTML / Iframe</label>
                       <input 
                         type="text"
-                        value={editDuration}
-                        onChange={e => setEditDuration(e.target.value)}
+                        value={editEmbedHtml}
+                        onChange={e => setEditEmbedHtml(e.target.value)}
                         className="w-full bg-black border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:border-cyan-500 transition outline-none font-semibold"
+                        placeholder="<iframe src='...' />"
                       />
                     </div>
                   </div>

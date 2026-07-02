@@ -80,7 +80,7 @@ export default function ShowDetails({
         </button>
 
         {/* Backdrop overlay layout details */}
-        <div className="relative z-10 w-full max-w-7xl mx-auto px-6 pb-8 md:pb-12 flex flex-col md:flex-row gap-8 items-end">
+        <div className="relative z-10 w-full max-w-7xl 2xl:max-w-[1440px] 3xl:max-w-[1800px] 4xl:max-w-[2200px] 5xl:max-w-[2560px] mx-auto px-6 pb-8 md:pb-12 flex flex-col md:flex-row gap-8 items-end">
           {/* Left Poster card */}
           <motion.div 
             initial={{ opacity: 0, y: 30 }}
@@ -92,12 +92,12 @@ export default function ShowDetails({
 
           {/* Right Text details inside banner */}
           <div className="flex-grow">
-            <div className="flex items-center gap-3 mb-3">
-              <span className="bg-cyan-500 text-black text-[10px] font-extrabold px-3 py-1 rounded-full uppercase tracking-widest shadow-md">
+            <div className="flex items-center flex-wrap gap-2 md:gap-3 mb-2 md:mb-3">
+              <span className="bg-cyan-500 text-black text-[9px] md:text-[10px] font-extrabold px-2 md:px-3 py-0.5 md:py-1 rounded-full uppercase tracking-widest shadow-md">
                 {video.category === 'movie' ? 'Movie' : 'Anime'}
               </span>
               {video.category === 'anime' && video.status && (
-                <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full uppercase tracking-widest shadow-md ${
+                <span className={`text-[9px] md:text-[10px] font-extrabold px-2 md:px-3 py-0.5 md:py-1 rounded-full uppercase tracking-widest shadow-md ${
                   video.status.toLowerCase() === 'completed'
                     ? 'bg-emerald-500 text-white'
                     : 'bg-amber-500 text-black'
@@ -106,65 +106,65 @@ export default function ShowDetails({
                 </span>
               )}
               {video.rating && (
-                <span className="bg-black/60 backdrop-blur-md text-cyan-400 text-xs font-black px-2.5 py-1 rounded-full flex items-center gap-1 border border-cyan-400/20">
-                  <Star size={12} fill="currentColor" />
+                <span className="bg-black/60 backdrop-blur-md text-cyan-400 text-[10px] md:text-xs font-black px-2 md:px-2.5 py-0.5 md:py-1 rounded-full flex items-center gap-1 border border-cyan-400/20">
+                  <Star className="w-2.5 h-2.5 md:w-3 md:h-3" fill="currentColor" />
                   {video.rating} Score
                 </span>
               )}
             </div>
 
-            <h1 className="text-4xl md:text-5xl font-black text-white tracking-tight leading-tight">
+            <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black text-white tracking-tight leading-tight">
               {video.title}
             </h1>
 
             {/* Quick Metadata Info */}
-            <div className="flex flex-wrap items-center gap-y-2 gap-x-6 mt-4 text-xs font-semibold text-gray-300">
-              <span className="flex items-center gap-1.5">
-                <Calendar size={14} className="text-cyan-400" />
+            <div className="flex flex-wrap items-center gap-y-1.5 md:gap-y-2 gap-x-4 md:gap-x-6 mt-2 md:mt-4 text-[10px] md:text-xs font-semibold text-gray-300">
+              <span className="flex items-center gap-1 md:gap-1.5">
+                <Calendar className="w-3 h-3 md:w-3.5 md:h-3.5 text-cyan-400" />
                 {video.year || '2024'}
               </span>
-              <span className="flex items-center gap-1.5">
-                <Clock size={14} className="text-cyan-400" />
+              <span className="flex items-center gap-1 md:gap-1.5">
+                <Clock className="w-3 h-3 md:w-3.5 md:h-3.5 text-cyan-400" />
                 {video.duration || '24 mins'}
               </span>
               {isAnime && (
-                <span className="flex items-center gap-1.5">
-                  <Tv size={14} className="text-cyan-400" />
+                <span className="flex items-center gap-1 md:gap-1.5">
+                  <Tv className="w-3 h-3 md:w-3.5 md:h-3.5 text-cyan-400" />
                   {displayEpisodes?.length || 0} Episodes
                 </span>
               )}
             </div>
 
             {/* Primary CTA Buttons inside Banner */}
-            <div className="flex items-center gap-4 mt-6">
+            <div className="flex items-center gap-3 md:gap-4 mt-4 md:mt-6">
               {video.category === 'movie' ? (
                 <button 
                   onClick={onPlayMovie}
-                  className="bg-cyan-500 hover:bg-cyan-400 text-black font-black text-sm uppercase tracking-wider px-8 py-3.5 rounded-2xl flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition transform hover:scale-105 active:scale-95"
+                  className="bg-cyan-500 hover:bg-cyan-400 text-black font-black text-xs md:text-sm uppercase tracking-wider px-5 py-2.5 md:px-8 md:py-3.5 rounded-xl md:rounded-2xl flex items-center gap-1.5 md:gap-2 shadow-lg shadow-cyan-500/20 transition transform hover:scale-105 active:scale-95"
                 >
-                  <Play size={18} fill="currentColor" />
+                  <Play className="w-4 h-4 md:w-[18px] md:h-[18px]" fill="currentColor" />
                   Play Movie
                 </button>
               ) : (
                 <button 
                   onClick={() => onPlayEpisode(0)}
-                  className="bg-cyan-500 hover:bg-cyan-400 text-black font-black text-sm uppercase tracking-wider px-8 py-3.5 rounded-2xl flex items-center gap-2 shadow-lg shadow-cyan-500/20 transition transform hover:scale-105 active:scale-95"
+                  className="bg-cyan-500 hover:bg-cyan-400 text-black font-black text-xs md:text-sm uppercase tracking-wider px-5 py-2.5 md:px-8 md:py-3.5 rounded-xl md:rounded-2xl flex items-center gap-1.5 md:gap-2 shadow-lg shadow-cyan-500/20 transition transform hover:scale-105 active:scale-95"
                 >
-                  <Play size={18} fill="currentColor" />
+                  <Play className="w-4 h-4 md:w-[18px] md:h-[18px]" fill="currentColor" />
                   Watch Episode 1
                 </button>
               )}
 
               <button 
                 onClick={() => onToggleFavorite(video.id)}
-                className={`p-3.5 rounded-2xl border transition shadow-lg ${
+                className={`p-2.5 md:p-3.5 rounded-xl md:rounded-2xl border transition shadow-lg ${
                   isFavorite 
                     ? 'bg-red-500/20 border-red-500 text-red-400 hover:bg-red-500/35' 
                     : 'bg-black/40 border-white/10 text-white hover:bg-white/10 hover:border-white/20'
                 }`}
                 title={isFavorite ? 'Remove from My List' : 'Add to My List'}
               >
-                <Heart size={20} fill={isFavorite ? 'currentColor' : 'none'} />
+                <Heart className="w-4 h-4 md:w-5 md:h-5" fill={isFavorite ? 'currentColor' : 'none'} />
               </button>
             </div>
           </div>
@@ -172,7 +172,7 @@ export default function ShowDetails({
       </div>
 
       {/* Show Details and Content List Grid */}
-      <div className="max-w-7xl mx-auto px-6 py-12 grid grid-cols-1 lg:grid-cols-3 gap-10">
+      <div className="max-w-7xl 2xl:max-w-[1440px] 3xl:max-w-[1800px] 4xl:max-w-[2200px] 5xl:max-w-[2560px] mx-auto px-6 py-12 grid grid-cols-1 lg:grid-cols-3 gap-10">
         
         {/* Left column - About & Synopsis */}
         <div className="lg:col-span-1 space-y-8">

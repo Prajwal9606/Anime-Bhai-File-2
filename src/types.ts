@@ -26,4 +26,5 @@ export interface Video {
   backdrop?: string;
   gallery?: string[];
   episodes?: Episode[];
+  embedHtml?: string;
 }
